@@ -1,0 +1,13 @@
+version: '3'
+
+tasks:
+  build:
+    desc: Compila todos los comandos en el directorio cmd
+    cmds:
+      - mkdir -p bin
+      - GOOS=linux GOARCH=amd64 go build -o ./bin/tvosec ./cmd/tvosec
+    sources:
+      - ./cmd/**/*.go
+      - ./internal/**/*.go
+      - go.mod
+      - go.sum

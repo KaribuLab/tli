@@ -24,6 +24,12 @@ func NewRootCommand() *cobra.Command {
 }
 
 func main() {
+	// Configurar el nivel de log por defecto a Info
+	slog.Configure(func(logger *slog.SugaredLogger) {
+		fmt.Println("Configurando nivel de log a INFO")
+	})
+	slog.SetLogLevel(slog.InfoLevel)
+
 	rootCmd := NewRootCommand()
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Println(err)

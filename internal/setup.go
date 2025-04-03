@@ -39,18 +39,18 @@ func fillWithDots(apiKey string) string {
 }
 
 func setup(cmd *cobra.Command, args []string) {
-	slog.Info("Setting up Titvo Security...")
-	fmt.Print("Enter your user ID: ")
+	slog.Info("Configurando Titvo Security...")
+	fmt.Print("Ingrese su ID de usuario: ")
 	var userId string
 	fmt.Scanln(&userId)
 	if strings.TrimSpace(userId) == "" {
-		slog.Error("User ID is required")
+		slog.Error("El ID de usuario es obligatorio")
 		os.Exit(1)
 	}
-	fmt.Print("Enter your API Key: ")
+	fmt.Print("Ingrese su API Key: ")
 	apiKey, err := term.ReadPassword(int(os.Stdin.Fd()))
 	if err != nil {
-		slog.Error("Error reading API Key:", err)
+		slog.Error("Error al leer API Key:", err)
 		os.Exit(1)
 	}
 	fmt.Println()
@@ -58,8 +58,8 @@ func setup(cmd *cobra.Command, args []string) {
 	stringApiKey := string(apiKey)
 	stringUserId := string(strings.TrimSpace(userId))
 
-	slog.Info("ID received successfully: ", stringUserId)
-	slog.Info("API Key received successfully: ", fillWithDots(stringApiKey))
+	slog.Info("ID recibido correctamente: ", stringUserId)
+	slog.Info("API Key recibida correctamente: ", fillWithDots(stringApiKey))
 
 	// Crear y enviar la petición HTTP
 	setupEndpoint := "https://3ovlfwktt3.execute-api.us-east-1.amazonaws.com/v1/auth/setup"
@@ -117,12 +117,12 @@ func setup(cmd *cobra.Command, args []string) {
 
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
-		slog.Error("Error getting home directory:", err)
+		slog.Error("Error al obtener el directorio home:", err)
 		os.Exit(1)
 	}
 	filePath := filepath.Join(homeDir, ".tvosec", "config.json")
 	os.MkdirAll(filepath.Dir(filePath), 0755)
 	config := NewConfig(stringUserId, stringApiKey)
 	config.Save(filePath)
-	slog.Info("Setup completed successfully. File saved in: ", filePath)
+	slog.Info("Configuración completada exitosamente. Archivo guardado en: ", filePath)
 }

@@ -29,10 +29,10 @@ func NewGitHookCommand() *cobra.Command {
 }
 
 func gitHook(cmd *cobra.Command, args []string) {
-	slog.Info("Creating git hook...")
+	slog.Info("Creando git hook...")
 	hookPath := filepath.Join(".git", "hooks")
 	if _, err := os.Stat(hookPath); os.IsNotExist(err) {
-		slog.Error("hook directory not found")
+		slog.Error("Directorio de hooks no encontrado")
 		return
 	}
 	hookPath = filepath.Join(hookPath, "pre-commit")

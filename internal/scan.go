@@ -61,25 +61,122 @@ func getConfig() (*Config, error) {
 
 // uploadFilesAsGzip comprime la lista de archivos en un archivo gzip y lo sube usando una URL prefirmada
 func uploadFilesAsGzip(filesArray []string, apiKey string, scanBatchId string) error {
-	// Crear la estructura de archivos para la petición
-	var filesList []map[string]string
+	// Verificar que haya archivos para procesar
+	var validFiles []string
 	for _, filePath := range filesArray {
-		if filePath == "" {
-			continue
+		if filePath != "" {
+			validFiles = append(validFiles, filePath)
+			slog.Info("Archivo a comprimir", "ruta", filePath)
 		}
-		filesList = append(filesList, map[string]string{
-			"name":         filePath,
-			"content_type": "application/gzip",
-		})
-		slog.Info("Archivo", filePath)
 	}
 
-	// Crear el cuerpo de la petición
+	if len(validFiles) == 0 {
+		slog.Error("No hay archivos válidos para escanear")
+		return fmt.Errorf("no hay archivos válidos para escanear")
+	}
+
+	// Crear un nombre de archivo específico para el archivo tar.gz
+	tempFileName := fmt.Sprintf("tvosec-%s.tar.gz", scanBatchId)
+	tempDir := os.TempDir()
+	tempFilePath := filepath.Join(tempDir, tempFileName)
+
+	// Crear el archivo con el nombre específico
+	tempFile, err := os.Create(tempFilePath)
+	if err != nil {
+		slog.Error("Error al crear archivo temporal", "error", err)
+		return err
+	}
+
+	slog.Debug("Archivo temporal creado", "ruta", tempFilePath, "nombre", tempFileName)
+
+	// Asegurar que el archivo temporal se borra al final
+	defer func() {
+		tempFile.Close()
+		err := os.Remove(tempFilePath)
+		if err != nil {
+			slog.Debug("No se pudo eliminar el archivo temporal", "error", err, "ruta", tempFilePath)
+		} else {
+			slog.Debug("Archivo temporal eliminado", "ruta", tempFilePath)
+		}
+	}()
+
+	// Crear los escritores para comprimir
+	gzipWriter := gzip.NewWriter(tempFile)
+	tarWriter := tar.NewWriter(gzipWriter)
+
+	// Añadir cada archivo al archivo tar
+	for _, filePath := range validFiles {
+		// Leer el contenido del archivo
+		fileContent, err := os.ReadFile(filePath)
+		if err != nil {
+			slog.Error("Error al leer el archivo", "error", err, "ruta del archivo", filePath)
+			continue
+		}
+
+		// Crear el encabezado tar para el archivo
+		header := &tar.Header{
+			Name: filePath,
+			Mode: 0600,
+			Size: int64(len(fileContent)),
+		}
+
+		// Escribir el encabezado y el contenido en el archivo tar
+		if err := tarWriter.WriteHeader(header); err != nil {
+			slog.Error("Error al escribir el encabezado tar", "error", err, "ruta del archivo", filePath)
+			continue
+		}
+
+		if _, err := tarWriter.Write(fileContent); err != nil {
+			slog.Error("Error al escribir el contenido al tar", "error", err, "ruta del archivo", filePath)
+			continue
+		}
+
+		slog.Info("Archivo añadido a la compresión", "ruta del archivo", filePath)
+	}
+
+	// Cerrar los escritores en el orden correcto
+	if err := tarWriter.Close(); err != nil {
+		slog.Error("Error al cerrar el escritor tar", "error", err)
+		return err
+	}
+
+	if err := gzipWriter.Close(); err != nil {
+		slog.Error("Error al cerrar el escritor gzip", "error", err)
+		return err
+	}
+
+	// Cerrar el archivo para asegurar que todos los datos se escriben
+	tempFile.Close()
+
+	// Obtener estadísticas del archivo para verificar tamaño
+	fileInfo, err := os.Stat(tempFilePath)
+	if err != nil {
+		slog.Error("Error al obtener información del archivo temporal", "error", err)
+		return err
+	}
+
+	fileSize := fileInfo.Size()
+	slog.Debug("Archivo comprimido creado exitosamente", "tamaño (bytes)", fileSize, "ruta", tempFilePath)
+
+	if fileSize == 0 {
+		slog.Error("El archivo comprimido está vacío")
+		return fmt.Errorf("el archivo comprimido está vacío")
+	}
+
+	// Crear el cuerpo de la petición para solicitar una URL prefirmada para el archivo tar.gz
 	requestBody := map[string]interface{}{
 		"source": "cli",
 		"args": map[string]interface{}{
 			"batch_id": scanBatchId,
-			"files":    filesList,
+			// Solicitar una única URL para el archivo tar.gz
+			"files": []map[string]string{
+				{
+					"name":         tempFileName, // Solo el nombre del archivo, no la ruta completa
+					"content_type": "application/x-tar+gzip",
+				},
+			},
+			// Añadir la lista de archivos originales como metadatos
+			"original_files": validFiles,
 		},
 	}
 
@@ -141,7 +238,7 @@ func uploadFilesAsGzip(filesArray []string, apiKey string, scanBatchId string) e
 		return err
 	}
 
-	// Extraer la URL prefirmada de la respuesta, manejando diferentes formatos posibles
+	// Buscar la URL prefirmada para el archivo tar.gz
 	var presignedURL string
 
 	// Verificar si hay un campo presigned_url (formato singular)
@@ -150,12 +247,18 @@ func uploadFilesAsGzip(filesArray []string, apiKey string, scanBatchId string) e
 		slog.Debug("URL prefirmada encontrada en campo 'presigned_url'")
 	} else if urlsMap, ok := rawResponse["presigned_urls"].(map[string]interface{}); ok {
 		// Verificar si hay un campo presigned_urls (formato mapa)
-		// Tomar la primera URL del mapa
-		for _, url := range urlsMap {
-			if urlStr, ok := url.(string); ok && urlStr != "" {
-				presignedURL = urlStr
-				slog.Debug("URL prefirmada encontrada en mapa 'presigned_urls'")
-				break
+		// Buscar la URL para nuestro archivo tar.gz
+		if url, ok := urlsMap[tempFileName].(string); ok && url != "" {
+			presignedURL = url
+			slog.Debug("URL prefirmada encontrada para el archivo tar.gz")
+		} else {
+			// Si no encontramos exactamente para nuestro archivo, tomar la primera disponible
+			for fileName, url := range urlsMap {
+				if urlStr, ok := url.(string); ok && urlStr != "" {
+					presignedURL = urlStr
+					slog.Debug("URL prefirmada encontrada para otro archivo", "nombre", fileName)
+					break
+				}
 			}
 		}
 	} else {
@@ -168,10 +271,10 @@ func uploadFilesAsGzip(filesArray []string, apiKey string, scanBatchId string) e
 					break
 				} else if urlMap, ok := value.(map[string]interface{}); ok {
 					// Si es un mapa, intentar encontrar una URL dentro de él
-					for _, mapValue := range urlMap {
+					for fileName, mapValue := range urlMap {
 						if urlStr, ok := mapValue.(string); ok && urlStr != "" && strings.HasPrefix(urlStr, "http") {
 							presignedURL = urlStr
-							slog.Debug("URL prefirmada encontrada en submapa", "campo", key)
+							slog.Debug("URL prefirmada encontrada en submapa", "campo", key, "nombre", fileName)
 							break
 						}
 					}
@@ -187,71 +290,28 @@ func uploadFilesAsGzip(filesArray []string, apiKey string, scanBatchId string) e
 
 	slog.Debug("URL prefirmada obtenida", "url", presignedURL)
 
-	// Crear archivo gzip con todos los archivos
-	slog.Info("Comprimiendo archivos...")
-
-	// Crear un buffer para almacenar el archivo comprimido
-	var buf bytes.Buffer
-	gzipWriter := gzip.NewWriter(&buf)
-	tarWriter := tar.NewWriter(gzipWriter)
-
-	// Añadir cada archivo al archivo tar
-	for _, filePath := range filesArray {
-		if filePath == "" {
-			continue
-		}
-
-		// Leer el contenido del archivo
-		fileContent, err := os.ReadFile(filePath)
-		if err != nil {
-			slog.Error("Error al leer el archivo", "error", err, "ruta del archivo", filePath)
-			continue
-		}
-
-		// Crear el encabezado tar para el archivo
-		header := &tar.Header{
-			Name: filePath,
-			Mode: 0600,
-			Size: int64(len(fileContent)),
-		}
-
-		// Escribir el encabezado y el contenido en el archivo tar
-		if err := tarWriter.WriteHeader(header); err != nil {
-			slog.Error("Error al escribir el encabezado tar", "error", err, "ruta del archivo", filePath)
-			continue
-		}
-
-		if _, err := tarWriter.Write(fileContent); err != nil {
-			slog.Error("Error al escribir el contenido al tar", "error", err, "ruta del archivo", filePath)
-			continue
-		}
-
-		slog.Info("Archivo añadido a la compresión", "ruta del archivo", filePath)
-	}
-
-	// Cerrar los escritores
-	if err := tarWriter.Close(); err != nil {
-		slog.Error("Error al cerrar el escritor tar", "error", err)
+	// Abrir el archivo para lectura
+	file, err := os.Open(tempFilePath)
+	if err != nil {
+		slog.Error("Error al abrir el archivo temporal para lectura", "error", err)
 		return err
 	}
-
-	if err := gzipWriter.Close(); err != nil {
-		slog.Error("Error al cerrar el escritor gzip", "error", err)
-		return err
-	}
-
-	slog.Info("Archivos comprimidos exitosamente")
+	defer file.Close()
 
 	// Subir el archivo comprimido
 	slog.Info("Subiendo archivo comprimido...")
+	slog.Debug("Detalles del archivo comprimido", "nombre", tempFileName, "ruta", tempFilePath, "tamaño", fileSize)
 
-	putReq, err := http.NewRequest("PUT", presignedURL, &buf)
+	// Preparar la petición PUT con el archivo
+	putReq, err := http.NewRequest("PUT", presignedURL, file)
 	if err != nil {
 		slog.Error("Error al crear la petición PUT", "error", err)
 		return err
 	}
 
-	putReq.Header.Set("Content-Type", "application/gzip")
+	// Usar el Content-Type correcto para archivos tar.gz
+	putReq.Header.Set("Content-Type", "application/x-tar+gzip")
+	putReq.ContentLength = fileSize
 
 	// Enviar la petición PUT
 	putResp, err := client.Do(putReq)
@@ -266,8 +326,10 @@ func uploadFilesAsGzip(filesArray []string, apiKey string, scanBatchId string) e
 
 	if putResp.StatusCode >= 200 && putResp.StatusCode < 300 {
 		slog.Info("Archivo comprimido subido exitosamente")
+		slog.Debug("Detalles del archivo subido", "ruta", tempFilePath, "nombre", tempFileName)
 	} else {
 		slog.Error("Error al subir el archivo comprimido", "status", putResp.Status)
+		slog.Debug("Detalles del archivo con error", "ruta", tempFilePath, "nombre", tempFileName)
 		return fmt.Errorf("error al subir el archivo comprimido: %s", putResp.Status)
 	}
 

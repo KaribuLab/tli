@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/gookit/slog"
@@ -57,6 +58,178 @@ func getConfig() (*Config, error) {
 	}
 
 	return config, nil
+}
+
+// runScanAndWaitForCompletion ejecuta el escaneo y espera hasta que se complete
+func runScanAndWaitForCompletion(batchId string, apiKey string) error {
+	apiBaseURL := "https://4psk9bcsud.execute-api.us-east-1.amazonaws.com/v1"
+
+	// Registrar tiempo de inicio
+	startTime := time.Now()
+
+	// 1. Ejecutar el escaneo
+	runScanURL := fmt.Sprintf("%s/run-scan", apiBaseURL)
+	requestBody := map[string]interface{}{
+		"source": "cli",
+		"args": map[string]interface{}{
+			"batch_id": batchId,
+		},
+	}
+
+	jsonData, err := json.Marshal(requestBody)
+	if err != nil {
+		slog.Error("Error al crear JSON para la petición de escaneo", "error", err)
+		return err
+	}
+
+	req, err := http.NewRequest("POST", runScanURL, bytes.NewBuffer(jsonData))
+	if err != nil {
+		slog.Error("Error al crear la petición HTTP para ejecutar el escaneo", "error", err)
+		return err
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-API-Key", apiKey)
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		slog.Error("Error al ejecutar el escaneo", "error", err)
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		var errorResponse map[string]interface{}
+		if err := json.NewDecoder(resp.Body).Decode(&errorResponse); err == nil {
+			if message, ok := errorResponse["message"].(string); ok {
+				slog.Error("Error al ejecutar el escaneo", "status", resp.Status, "mensaje", message)
+				return fmt.Errorf("error al ejecutar el escaneo: %s - %s", resp.Status, message)
+			}
+		}
+		slog.Error("Error al ejecutar el escaneo", "status", resp.Status)
+		return fmt.Errorf("error al ejecutar el escaneo: %s", resp.Status)
+	}
+
+	// Extraer scan_id de la respuesta
+	var scanResponse struct {
+		ScanID string `json:"scan_id"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&scanResponse); err != nil {
+		slog.Error("Error al decodificar la respuesta del escaneo", "error", err)
+		return err
+	}
+
+	scanID := scanResponse.ScanID
+	if scanID == "" {
+		slog.Error("No se pudo obtener el scan_id de la respuesta")
+		return fmt.Errorf("no se pudo obtener el scan_id de la respuesta")
+	}
+
+	slog.Info("Escaneo iniciado correctamente", "scan_id", scanID)
+
+	// 2. Verificar estado del escaneo en bucle
+	scanStatusURL := fmt.Sprintf("%s/scan-status", apiBaseURL)
+	requestBody = map[string]interface{}{
+		"scan_id": scanID,
+	}
+
+	jsonData, err = json.Marshal(requestBody)
+	if err != nil {
+		slog.Error("Error al crear JSON para la petición de estado", "error", err)
+		return err
+	}
+
+	// Establecer tiempo límite de 1 hora
+	deadline := time.Now().Add(1 * time.Hour)
+
+	for time.Now().Before(deadline) {
+		// Esperar 5 segundos entre peticiones
+		time.Sleep(5 * time.Second)
+
+		// Crear nueva petición para verificar estado
+		statusReq, err := http.NewRequest("POST", scanStatusURL, bytes.NewBuffer(jsonData))
+		if err != nil {
+			slog.Error("Error al crear la petición HTTP para verificar estado", "error", err)
+			continue
+		}
+
+		statusReq.Header.Set("Content-Type", "application/json")
+		statusReq.Header.Set("X-API-Key", apiKey)
+
+		statusResp, err := client.Do(statusReq)
+		if err != nil {
+			slog.Error("Error al verificar estado del escaneo", "error", err)
+			continue
+		}
+
+		if statusResp.StatusCode != http.StatusOK {
+			statusResp.Body.Close()
+			slog.Error("Error al verificar estado del escaneo", "status", statusResp.Status)
+			continue
+		}
+
+		// Leer respuesta
+		var statusResponse struct {
+			Status string `json:"status"`
+		}
+
+		if err := json.NewDecoder(statusResp.Body).Decode(&statusResponse); err != nil {
+			statusResp.Body.Close()
+			slog.Error("Error al decodificar la respuesta de estado", "error", err)
+			continue
+		}
+
+		statusResp.Body.Close()
+
+		// Verificar estado
+		slog.Info("Estado del escaneo", "scan_id", scanID, "estado", statusResponse.Status)
+
+		if statusResponse.Status == "COMPLETED" {
+			// Calcular tiempo total
+			elapsedTime := time.Since(startTime)
+			hours := int(elapsedTime.Hours())
+			minutes := int(elapsedTime.Minutes()) % 60
+			seconds := int(elapsedTime.Seconds()) % 60
+			milliseconds := int(elapsedTime.Milliseconds()) % 1000
+
+			// Formatear tiempo transcurrido
+			formattedTime := fmt.Sprintf("%02d:%02d:%02d.%03d", hours, minutes, seconds, milliseconds)
+
+			slog.Info("Escaneo completado correctamente", "scan_id", scanID, "tiempo_total", formattedTime)
+			return nil
+		} else if statusResponse.Status == "ERROR" || statusResponse.Status == "FAILED" {
+			// Calcular tiempo total
+			elapsedTime := time.Since(startTime)
+			hours := int(elapsedTime.Hours())
+			minutes := int(elapsedTime.Minutes()) % 60
+			seconds := int(elapsedTime.Seconds()) % 60
+			milliseconds := int(elapsedTime.Milliseconds()) % 1000
+
+			// Formatear tiempo transcurrido
+			formattedTime := fmt.Sprintf("%02d:%02d:%02d.%03d", hours, minutes, seconds, milliseconds)
+
+			slog.Error("Escaneo finalizado con errores", "scan_id", scanID, "estado", statusResponse.Status, "tiempo_total", formattedTime)
+			return fmt.Errorf("escaneo finalizado con estado: %s", statusResponse.Status)
+		}
+
+		// Si no es ninguno de los estados finales, continuar esperando
+	}
+
+	// Si llegamos aquí, se ha superado el tiempo límite
+	// Calcular tiempo total (será aproximadamente 1 hora)
+	elapsedTime := time.Since(startTime)
+	hours := int(elapsedTime.Hours())
+	minutes := int(elapsedTime.Minutes()) % 60
+	seconds := int(elapsedTime.Seconds()) % 60
+	milliseconds := int(elapsedTime.Milliseconds()) % 1000
+
+	// Formatear tiempo transcurrido
+	formattedTime := fmt.Sprintf("%02d:%02d:%02d.%03d", hours, minutes, seconds, milliseconds)
+
+	slog.Error("Tiempo de espera agotado para el escaneo", "scan_id", scanID, "tiempo_total", formattedTime)
+	return fmt.Errorf("tiempo de espera agotado para el escaneo (1 hora)")
 }
 
 // uploadFilesAsGzip comprime la lista de archivos en un archivo gzip y lo sube usando una URL prefirmada
@@ -327,6 +500,12 @@ func uploadFilesAsGzip(filesArray []string, apiKey string, scanBatchId string) e
 	if putResp.StatusCode >= 200 && putResp.StatusCode < 300 {
 		slog.Info("Archivo comprimido subido exitosamente")
 		slog.Debug("Detalles del archivo subido", "ruta", tempFilePath, "nombre", tempFileName)
+
+		// Ejecutar el escaneo y esperar a que se complete
+		if err := runScanAndWaitForCompletion(scanBatchId, apiKey); err != nil {
+			slog.Error("Error durante el proceso de escaneo", "error", err)
+			return err
+		}
 	} else {
 		slog.Error("Error al subir el archivo comprimido", "status", putResp.Status)
 		slog.Debug("Detalles del archivo con error", "ruta", tempFilePath, "nombre", tempFileName)

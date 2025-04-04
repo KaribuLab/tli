@@ -502,9 +502,14 @@ func uploadFilesAsGzip(filesArray []string, apiKey string, scanBatchId string) e
 		slog.Debug("Detalles del archivo subido", "ruta", tempFilePath, "nombre", tempFileName)
 
 		// Ejecutar el escaneo y esperar a que se complete
-		if err := runScanAndWaitForCompletion(scanBatchId, apiKey); err != nil {
-			slog.Error("Error durante el proceso de escaneo", "error", err)
-			return err
+		scanResult := runScanAndWaitForCompletion(scanBatchId, apiKey)
+		if scanResult != nil {
+			// Verificar si el error es por estado FAILED
+			if strings.Contains(scanResult.Error(), "escaneo finalizado con estado: FAILED") {
+				// Terminar con código de salida 1 para indicar fallo
+				os.Exit(1)
+			}
+			return scanResult
 		}
 	} else {
 		slog.Error("Error al subir el archivo comprimido", "status", putResp.Status)

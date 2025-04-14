@@ -36,6 +36,7 @@ func NewScanCommand() *cobra.Command {
 	}
 	cmd.Flags().StringP("path", "p", ".", "Path to scan")
 	cmd.Flags().StringP("output", "o", "text", "Output format")
+	cmd.Flags().StringP("remote", "r", "origin", "Remote to scan")
 	cmd.Flags().StringP("commit", "c", "", "Commit hash to scan")
 	cmd.Flags().BoolP("staged", "s", false, "Staged files only")
 	return cmd
@@ -61,7 +62,7 @@ func getConfig() (*Config, error) {
 }
 
 // runScanAndWaitForCompletion ejecuta el escaneo y espera hasta que se complete
-func runScanAndWaitForCompletion(batchId string, apiKey string) error {
+func runScanAndWaitForCompletion(batchId string, apiKey string, remote string) error {
 	apiBaseURL := "https://4psk9bcsud.execute-api.us-east-1.amazonaws.com/v1"
 
 	// Registrar tiempo de inicio
@@ -69,10 +70,16 @@ func runScanAndWaitForCompletion(batchId string, apiKey string) error {
 
 	// 1. Ejecutar el escaneo
 	runScanURL := fmt.Sprintf("%s/run-scan", apiBaseURL)
+	remoteURL, err := execGitCommand([]string{"remote", "get-url", remote})
+	if err != nil {
+		slog.Error("Error al obtener el URL del remote", "error", err)
+		return err
+	}
 	requestBody := map[string]interface{}{
 		"source": "cli",
 		"args": map[string]interface{}{
-			"batch_id": batchId,
+			"remote_url": remoteURL,
+			"batch_id":   batchId,
 		},
 	}
 
@@ -232,8 +239,8 @@ func runScanAndWaitForCompletion(batchId string, apiKey string) error {
 	return fmt.Errorf("tiempo de espera agotado para el escaneo (1 hora)")
 }
 
-// uploadFilesAsGzip comprime la lista de archivos en un archivo gzip y lo sube usando una URL prefirmada
-func uploadFilesAsGzip(filesArray []string, apiKey string, scanBatchId string) error {
+// uploadFilesAsGzipAndRun comprime la lista de archivos en un archivo gzip y lo sube usando una URL prefirmada
+func uploadFilesAsGzipAndRun(filesArray []string, apiKey string, scanBatchId string, remote string) error {
 	// Verificar que haya archivos para procesar
 	var validFiles []string
 	for _, filePath := range filesArray {
@@ -502,7 +509,7 @@ func uploadFilesAsGzip(filesArray []string, apiKey string, scanBatchId string) e
 		slog.Debug("Detalles del archivo subido", "ruta", tempFilePath, "nombre", tempFileName)
 
 		// Ejecutar el escaneo y esperar a que se complete
-		scanResult := runScanAndWaitForCompletion(scanBatchId, apiKey)
+		scanResult := runScanAndWaitForCompletion(scanBatchId, apiKey, remote)
 		if scanResult != nil {
 			// Verificar si el error es por estado FAILED
 			if strings.Contains(scanResult.Error(), "escaneo finalizado con estado: FAILED") {
@@ -546,6 +553,11 @@ func scan(cmd *cobra.Command, args []string) {
 		slog.Error("Error al obtener el formato de salida", "error", err)
 		os.Exit(1)
 	}
+	remote, err := cmd.Flags().GetString("remote")
+	if err != nil {
+		slog.Error("Error al obtener el remote", "error", err)
+		os.Exit(1)
+	}
 
 	// Verificar que se proporcione --commit o --staged
 	if commit == "" && !staged {
@@ -580,7 +592,7 @@ func scan(cmd *cobra.Command, args []string) {
 		}
 
 		// Subir archivos como gzip
-		if err := uploadFilesAsGzip(filesArray, config.APIKey, scanBatchId); err != nil {
+		if err := uploadFilesAsGzipAndRun(filesArray, config.APIKey, scanBatchId, remote); err != nil {
 			slog.Error("Error al subir los archivos", "error", err)
 			os.Exit(1)
 		}
@@ -619,7 +631,7 @@ func scan(cmd *cobra.Command, args []string) {
 		}
 
 		// Subir archivos como gzip
-		if err := uploadFilesAsGzip(filteredFiles, config.APIKey, scanBatchId); err != nil {
+		if err := uploadFilesAsGzipAndRun(filteredFiles, config.APIKey, scanBatchId, remote); err != nil {
 			slog.Error("Error al subir los archivos", "error", err)
 			os.Exit(1)
 		}

@@ -5,7 +5,7 @@ tasks:
     desc: Compila todos los comandos en el directorio cmd
     cmds:
       - mkdir -p bin
-      - GOOS=linux GOARCH=amd64 go build -o ./bin/tvosec ./cmd/tvosec
+      - GOOS=linux GOARCH=amd64 go build -o ./bin/tli ./cmd/tvosec
     sources:
       - ./cmd/**/*.go
       - ./internal/**/*.go

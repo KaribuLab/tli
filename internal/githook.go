@@ -16,8 +16,8 @@ tli scan --path $cwd --staged
 `
 
 const preCommitHookWindows = `@echo off
-set cwd=%cd%
-tli scan --path %cwd% --staged
+set cwd=%%cd%%
+tli scan --path %%cwd%% --staged
 `
 
 func NewGitHookCommand() *cobra.Command {

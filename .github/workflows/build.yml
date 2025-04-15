@@ -91,7 +91,6 @@ jobs:
   build:
     name: Build and Release Binaries
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: create_tag
     permissions:
       contents: write
       packages: write

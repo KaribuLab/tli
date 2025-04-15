@@ -12,12 +12,12 @@ import (
 
 const preCommitHookLinux = `#!/bin/sh
 cwd=$(pwd)
-tvosec scan --path $cwd --staged
+tli scan --path $cwd --staged
 `
 
 const preCommitHookWindows = `@echo off
 set cwd=%cd%
-tvosec scan --path %cwd% --staged
+tli scan --path %cwd% --staged
 `
 
 func NewGitHookCommand() *cobra.Command {

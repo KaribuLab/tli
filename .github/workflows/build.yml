@@ -27,7 +27,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
             name: kli
-            path: bin/kli
+            path: kli
   check_tag:
     needs: kli
     runs-on: ubuntu-latest

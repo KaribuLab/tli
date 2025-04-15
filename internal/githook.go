@@ -12,12 +12,12 @@ import (
 
 const preCommitHookLinux = `#!/bin/sh
 cwd=$(pwd)
-tli scan --path $cwd --staged
+tli scan --path $cwd --staged --githook
 `
 
 const preCommitHookWindows = `@echo off
 set cwd=%%cd%%
-tli scan --path %%cwd%% --staged
+tli scan --path %%cwd%% --staged --githook
 `
 
 func NewGitHookCommand() *cobra.Command {
@@ -36,7 +36,7 @@ func gitHook(cmd *cobra.Command, args []string) {
 		return
 	}
 	hookPath = filepath.Join(hookPath, "pre-commit")
-	os.MkdirAll(filepath.Dir(hookPath), 0755)
+	os.MkdirAll(filepath.Dir(hookPath), 0700)
 	if runtime.GOOS == "windows" {
 		fileName := strings.Join([]string{hookPath, "bat"}, ".")
 		err := os.WriteFile(fileName, []byte(preCommitHookWindows), 0755)

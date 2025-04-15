@@ -70,6 +70,7 @@ jobs:
       name: Checkout
       uses: actions/checkout@v4
       with:
+        ssh-key: ${{ secrets.KARIBU_SSH_KEY }}
         fetch-depth: 0
     -
       name: Set up Git user

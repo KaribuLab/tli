@@ -120,7 +120,7 @@ func setup(cmd *cobra.Command, args []string) {
 		slog.Error("Error al obtener el directorio home:", err)
 		os.Exit(1)
 	}
-	filePath := filepath.Join(homeDir, ".tvosec", "config.json")
+	filePath := filepath.Join(homeDir, ".tli", "config.json")
 	os.MkdirAll(filepath.Dir(filePath), 0755)
 	config := NewConfig(stringUserId, stringApiKey)
 	config.Save(filePath)

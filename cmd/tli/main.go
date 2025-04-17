@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/KaribuLab/tvosec/internal"
+	"github.com/KaribuLab/tli/internal"
 	"github.com/gookit/slog"
 	"github.com/spf13/cobra"
 )

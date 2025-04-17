@@ -1,4 +1,4 @@
-module github.com/KaribuLab/tvosec
+module github.com/KaribuLab/tli
 
 go 1.24.1
 

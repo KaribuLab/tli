@@ -74,7 +74,7 @@ func getConfig(logEnabled bool) (*Config, error) {
 		return nil, err
 	}
 
-	configPath := filepath.Join(homeDir, ".tvosec", "config.json")
+	configPath := filepath.Join(homeDir, ".tli", "config.json")
 	config := &Config{}
 	if err := config.Load(configPath); err != nil {
 		logError(logEnabled, "Error al cargar la configuración", "error", err)
@@ -280,7 +280,7 @@ func uploadFilesAsGzipAndRun(filesArray []string, apiKey string, scanBatchId str
 	}
 
 	// Crear un nombre de archivo específico para el archivo tar.gz
-	tempFileName := fmt.Sprintf("tvosec-%s.tar.gz", scanBatchId)
+	tempFileName := fmt.Sprintf("tli-%s.tar.gz", scanBatchId)
 	tempDir := os.TempDir()
 	tempFilePath := filepath.Join(tempDir, tempFileName)
 

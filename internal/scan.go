@@ -85,14 +85,12 @@ func getConfig(logEnabled bool) (*Config, error) {
 }
 
 // runScanAndWaitForCompletion ejecuta el escaneo y espera hasta que se complete
-func runScanAndWaitForCompletion(batchId string, apiKey string, remote string, logEnabled bool) (string, error) {
-	apiBaseURL := "https://4psk9bcsud.execute-api.us-east-1.amazonaws.com/v1"
-
+func runScanAndWaitForCompletion(batchId string, apiKey string, apiEndpoint string, remote string, logEnabled bool) (string, error) {
 	// Registrar tiempo de inicio
 	startTime := time.Now()
 
 	// 1. Ejecutar el escaneo
-	runScanURL := fmt.Sprintf("%s/run-scan", apiBaseURL)
+	runScanURL := fmt.Sprintf("%s/run-scan", apiEndpoint)
 	repositoryUrl, err := execGitCommand([]string{"remote", "get-url", remote})
 	if err != nil {
 		logError(logEnabled, "Error al obtener el URL del remote", "error", err)
@@ -119,7 +117,7 @@ func runScanAndWaitForCompletion(batchId string, apiKey string, remote string, l
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-API-Key", apiKey)
+	req.Header.Set("X-API-Key", fmt.Sprintf("ENC:%s", apiKey))
 
 	client := &http.Client{}
 	resp, err := client.Do(req)
@@ -160,7 +158,7 @@ func runScanAndWaitForCompletion(batchId string, apiKey string, remote string, l
 	logInfo(logEnabled, "Escaneo iniciado correctamente", "scan_id", scanID)
 
 	// 2. Verificar estado del escaneo en bucle
-	scanStatusURL := fmt.Sprintf("%s/scan-status", apiBaseURL)
+	scanStatusURL := fmt.Sprintf("%s/scan-status", apiEndpoint)
 	requestBody = map[string]interface{}{
 		"scan_id": scanID,
 	}
@@ -186,7 +184,7 @@ func runScanAndWaitForCompletion(batchId string, apiKey string, remote string, l
 		}
 
 		statusReq.Header.Set("Content-Type", "application/json")
-		statusReq.Header.Set("X-API-Key", apiKey)
+		statusReq.Header.Set("X-API-Key", fmt.Sprintf("ENC:%s", apiKey))
 
 		statusResp, err := client.Do(statusReq)
 		if err != nil {
@@ -264,7 +262,7 @@ func runScanAndWaitForCompletion(batchId string, apiKey string, remote string, l
 }
 
 // uploadFilesAsGzipAndRun comprime la lista de archivos en un archivo gzip y lo sube usando una URL prefirmada
-func uploadFilesAsGzipAndRun(filesArray []string, apiKey string, scanBatchId string, remote string, logEnabled bool) error {
+func uploadFilesAsGzipAndRun(filesArray []string, apiKey string, scanBatchId string, remote string, apiEndpoint string, logEnabled bool) error {
 	// Verificar que haya archivos para procesar
 	var validFiles []string
 	for _, filePath := range filesArray {
@@ -392,7 +390,7 @@ func uploadFilesAsGzipAndRun(filesArray []string, apiKey string, scanBatchId str
 	}
 
 	// Crear la petición HTTP
-	endpoint := "https://4psk9bcsud.execute-api.us-east-1.amazonaws.com/v1/cli-files"
+	endpoint := apiEndpoint + "/cli-files"
 	req, err := http.NewRequest("POST", endpoint, bytes.NewBuffer(jsonData))
 	if err != nil {
 		logError(logEnabled, "Error al crear la petición HTTP", "error", err)
@@ -401,7 +399,7 @@ func uploadFilesAsGzipAndRun(filesArray []string, apiKey string, scanBatchId str
 
 	// Establecer headers
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("x-api-key", apiKey)
+	req.Header.Set("x-api-key", fmt.Sprintf("ENC:%s", apiKey))
 
 	// Enviar la petición
 	client := &http.Client{}
@@ -533,7 +531,7 @@ func uploadFilesAsGzipAndRun(filesArray []string, apiKey string, scanBatchId str
 		logDebug(logEnabled, "Detalles del archivo subido", "ruta", tempFilePath, "nombre", tempFileName)
 
 		// Ejecutar el escaneo y esperar a que se complete
-		reportUrl, err := runScanAndWaitForCompletion(scanBatchId, apiKey, remote, logEnabled)
+		reportUrl, err := runScanAndWaitForCompletion(scanBatchId, apiKey, apiEndpoint, remote, logEnabled)
 		if err != nil {
 			// Verificar si el error es por estado FAILED
 			if strings.Contains(err.Error(), "escaneo finalizado con estado: FAILED") {
@@ -626,7 +624,7 @@ func scan(cmd *cobra.Command, args []string) {
 		}
 
 		// Subir archivos como gzip
-		if err := uploadFilesAsGzipAndRun(filesArray, config.APIKey, scanBatchId, remote, logEnabled); err != nil {
+		if err := uploadFilesAsGzipAndRun(filesArray, config.APIKey, scanBatchId, remote, config.APIEndpoint, logEnabled); err != nil {
 			logError(logEnabled, "Error al subir los archivos", "error", err)
 			os.Exit(1)
 		}
@@ -665,7 +663,7 @@ func scan(cmd *cobra.Command, args []string) {
 		}
 
 		// Subir archivos como gzip
-		if err := uploadFilesAsGzipAndRun(filteredFiles, config.APIKey, scanBatchId, remote, logEnabled); err != nil {
+		if err := uploadFilesAsGzipAndRun(filteredFiles, config.APIKey, scanBatchId, remote, config.APIEndpoint, logEnabled); err != nil {
 			logError(logEnabled, "Error al subir los archivos", "error", err)
 			os.Exit(1)
 		}

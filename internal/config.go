@@ -6,12 +6,13 @@ import (
 )
 
 type Config struct {
-	UserID string `json:"user_id"`
-	APIKey string `json:"api_key"`
+	UserID      string `json:"user_id"`
+	APIKey      string `json:"api_key"`
+	APIEndpoint string `json:"api_endpoint"`
 }
 
-func NewConfig(userId string, apiKey string) *Config {
-	return &Config{UserID: userId, APIKey: apiKey}
+func NewConfig(userId string, apiKey string, apiEndpoint string) *Config {
+	return &Config{UserID: userId, APIKey: apiKey, APIEndpoint: apiEndpoint}
 }
 
 func (c *Config) Save(filepath string) error {
@@ -19,7 +20,7 @@ func (c *Config) Save(filepath string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath, data, 0644)
+	return os.WriteFile(filepath, data, 0600)
 }
 
 func (c *Config) Load(filepath string) error {

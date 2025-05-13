@@ -40,6 +40,18 @@ func fillWithDots(apiKey string) string {
 
 func setup(cmd *cobra.Command, args []string) {
 	slog.Info("Configurando Titvo Security...")
+	var apiEndpoint string
+	fmt.Print("Ingrese la URL de su API: ")
+	// Validar que la URL sea HTTPS
+	fmt.Scanln(&apiEndpoint)
+	if !strings.HasPrefix(apiEndpoint, "https://") {
+		slog.Error("La URL debe comenzar con https://")
+		os.Exit(1)
+	}
+	if strings.TrimSpace(apiEndpoint) == "" {
+		slog.Error("La URL de la API es obligatoria")
+		os.Exit(1)
+	}
 	fmt.Print("Ingrese su ID de usuario: ")
 	var userId string
 	fmt.Scanln(&userId)
@@ -62,7 +74,7 @@ func setup(cmd *cobra.Command, args []string) {
 	slog.Info("API Key recibida correctamente: ", fillWithDots(stringApiKey))
 
 	// Crear y enviar la petición HTTP
-	setupEndpoint := "https://3ovlfwktt3.execute-api.us-east-1.amazonaws.com/v1/auth/setup"
+	setupEndpoint := apiEndpoint + "/auth/setup"
 
 	// Preparar los datos para enviar
 	requestData := map[string]interface{}{
@@ -98,6 +110,9 @@ func setup(cmd *cobra.Command, args []string) {
 	}
 	defer resp.Body.Close()
 
+	var encryptedApiKey string
+	var taskEndpoint string
+
 	// Verificar respuesta
 	if resp.StatusCode != http.StatusOK {
 		// Extraer mensaje de error del cuerpo JSON
@@ -114,6 +129,17 @@ func setup(cmd *cobra.Command, args []string) {
 	}
 
 	slog.Info("Verificación con el servidor completada exitosamente")
+	var response map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&response); err == nil {
+		taskEndpoint = response["task_endpoint"].(string)
+		encryptedApiKey = response["encrypted_api_key"].(string)
+		slog.Info("Endpoint de la tarea:", taskEndpoint)
+	} else {
+		slog.Error("Error al decodificar la respuesta del servidor:", err)
+		os.Exit(1)
+	}
+
+	slog.Info("Verificación con el servidor completada exitosamente")
 
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
@@ -122,7 +148,7 @@ func setup(cmd *cobra.Command, args []string) {
 	}
 	filePath := filepath.Join(homeDir, ".tli", "config.json")
 	os.MkdirAll(filepath.Dir(filePath), 0755)
-	config := NewConfig(stringUserId, stringApiKey)
+	config := NewConfig(stringUserId, encryptedApiKey, taskEndpoint)
 	config.Save(filePath)
 	slog.Info("Configuración completada exitosamente. Archivo guardado en: ", filePath)
 }

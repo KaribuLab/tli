@@ -32,10 +32,11 @@ tli setup
 ```
 
 Este comando te solicitará:
-- Tu User ID
+- La URL de la API (debe comenzar con https://)
+- Tu ID de usuario
 - Tu API Key (se introducirá de forma segura)
 
-Esta información se almacenará en `~/.tli/config.json`.
+La herramienta verificará tus credenciales con el servidor y almacenará la configuración en `~/.tli/config.json`.
 
 ## Comandos Disponibles
 

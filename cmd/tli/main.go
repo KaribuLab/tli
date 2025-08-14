@@ -15,7 +15,7 @@ func NewRootCommand() *cobra.Command {
 	if ok {
 		slog.SetLevelByName(logLevel)
 	} else {
-		slog.SetLevelByName("info")
+		slog.SetLevelByName("fatal")
 	}
 	rootCmd := &cobra.Command{
 		Use: "tli",
@@ -29,8 +29,13 @@ func NewRootCommand() *cobra.Command {
 
 func main() {
 	rootCmd := NewRootCommand()
+	// Configurar Cobra para no imprimir errores automáticamente
+	rootCmd.SilenceUsage = true
+	rootCmd.SilenceErrors = true
+
 	if err := rootCmd.Execute(); err != nil {
-		fmt.Println(err)
+		// Escribir errores a stderr en lugar de stdout
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }

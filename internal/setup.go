@@ -76,6 +76,8 @@ func setup(cmd *cobra.Command, args []string) {
 	// Crear y enviar la petición HTTP
 	setupEndpoint := apiEndpoint + "/auth/setup"
 
+	slog.Debug("Endpoint de setup:", setupEndpoint)
+
 	// Preparar los datos para enviar
 	requestData := map[string]interface{}{
 		"source": "cli",

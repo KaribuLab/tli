@@ -82,17 +82,24 @@ func getAPIConfig() (*Config, error) {
 	return config, nil
 }
 
-// configFromEnv builds the config from TLI_USER_ID, TLI_API_KEY and
-// TLI_API_ENDPOINT. Returns nil unless all three are set. The values are the
-// same ones `tli setup` writes to ~/.tli/config.json.
+// configFromEnv builds the config from TLI_API_KEY and TLI_API_ENDPOINT
+// (both required). Returns nil when either is missing. No user id is needed:
+// scan requests authenticate with the API key alone.
+//
+// TLI_API_KEY is the raw API key (the same one given to `tli setup`); it is
+// sent as-is and the server validates it directly, no setup needed. A value
+// copied from ~/.tli/config.json also works if prefixed with "ENC:".
 func configFromEnv() *Config {
-	userID := os.Getenv("TLI_USER_ID")
 	apiKey := os.Getenv("TLI_API_KEY")
 	apiEndpoint := os.Getenv("TLI_API_ENDPOINT")
-	if userID == "" || apiKey == "" || apiEndpoint == "" {
+	if apiKey == "" || apiEndpoint == "" {
 		return nil
 	}
-	return NewConfig(userID, apiKey, apiEndpoint)
+	return &Config{
+		APIKey:      apiKey,
+		APIEndpoint: apiEndpoint,
+		encrypted:   false,
+	}
 }
 
 func UploadFilesAsGzip(params *UploadFilesAsGzipInput) error {
@@ -220,7 +227,7 @@ func UploadFilesAsGzip(params *UploadFilesAsGzipInput) error {
 
 	// Establecer headers
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("x-api-key", fmt.Sprintf("ENC:%s", config.APIKey))
+	req.Header.Set("x-api-key", config.APIKeyHeader())
 
 	// Enviar la petición
 	client := &http.Client{}
@@ -392,7 +399,7 @@ func RunScan(params *RunScanInput) (*RunScanOutput, error) {
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-API-Key", fmt.Sprintf("ENC:%s", config.APIKey))
+	req.Header.Set("X-API-Key", config.APIKeyHeader())
 
 	client := &http.Client{}
 	resp, err := client.Do(req)
@@ -478,7 +485,7 @@ func GetScanStatus(params *GetScanStatusInput) (*GetScanStatusOutput, error) {
 			}
 
 			statusReq.Header.Set("Content-Type", "application/json")
-			statusReq.Header.Set("X-API-Key", fmt.Sprintf("ENC:%s", config.APIKey))
+			statusReq.Header.Set("X-API-Key", config.APIKeyHeader())
 
 			statusResp, err := http.DefaultClient.Do(statusReq)
 			defer closeBody(*statusResp)

@@ -28,8 +28,8 @@ RUN apk add --no-cache bash git ca-certificates
 
 COPY --from=build /out/tli /usr/local/bin/tli
 
-# Config is read from ~/.tli/config.json, or from TLI_USER_ID, TLI_API_KEY
-# and TLI_API_ENDPOINT when that file does not exist (CI usage).
+# Config is read from ~/.tli/config.json, or from TLI_API_KEY and
+# TLI_API_ENDPOINT when that file does not exist (CI usage).
 WORKDIR /workspace
 
 CMD ["tli", "--help"]

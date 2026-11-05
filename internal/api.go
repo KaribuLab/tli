@@ -38,6 +38,7 @@ type UploadFilesAsGzipInput struct {
 type RunScanInput struct {
 	BatchId       string
 	RepositoryURL string
+	Branch        string
 }
 
 type RunScanOutput struct {
@@ -322,6 +323,10 @@ func sanitizeRepositoryURL(repositoryURL string) string {
 	// Limpiar espacios en blanco y saltos de línea
 	cleanURL := strings.TrimSpace(strings.ReplaceAll(repositoryURL, "\n", ""))
 
+	if !strings.HasPrefix("https://", cleanURL) {
+		return cleanURL
+	}
+
 	// Intentar parsear como URL
 	parsedURL, err := url.Parse(cleanURL)
 	if err != nil {
@@ -353,6 +358,7 @@ func RunScan(params *RunScanInput) (*RunScanOutput, error) {
 		"args": map[string]interface{}{
 			"repository_url": sanitizeRepositoryURL(params.RepositoryURL),
 			"batch_id":       params.BatchId,
+			"branch":         params.Branch,
 		},
 	}
 	jsonData, err := json.Marshal(requestBody)

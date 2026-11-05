@@ -25,9 +25,21 @@ type Annotation struct {
 	Recommendation string `json:"recommendation"`
 }
 type ScanResult struct {
-	Status         string       `json:"status"`
-	NumberOfIssues int          `json:"number_of_issues"`
-	Annotations    []Annotation `json:"annotations"`
+	Status         string          `json:"status"`
+	NumberOfIssues int             `json:"number_of_issues"`
+	Annotations    []Annotation    `json:"annotations"`
+	Coverage       *ScanCoverage   `json:"coverage,omitempty"`
+	Incomplete     *ScanIncomplete `json:"incomplete,omitempty"`
+}
+
+type ScanCoverage struct {
+	Complete bool     `json:"complete"`
+	Errors   []string `json:"errors"`
+}
+
+type ScanIncomplete struct {
+	Message               string   `json:"message"`
+	FilesNotFullyAnalyzed []string `json:"files_not_fully_analyzed"`
 }
 
 type StatusResult struct {
@@ -36,7 +48,43 @@ type StatusResult struct {
 	Result    ScanResult `json:"result"`
 }
 
+// UnmarshalJSON acepta tanto el resultado plano actual como el formato anidado anterior.
+func (r *StatusResult) UnmarshalJSON(data []byte) error {
+	type statusResult StatusResult
+	var wire struct {
+		ScanID      string          `json:"scan_id"`
+		ReportURL   string          `json:"report_url"`
+		Result      json.RawMessage `json:"result"`
+		IssuesCount *int            `json:"issues_count"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	var decoded statusResult
+	if len(wire.Result) > 0 && string(wire.Result) != "null" {
+		if err := json.Unmarshal(data, &decoded); err != nil {
+			return err
+		}
+	} else {
+		decoded.ScanID, decoded.ReportUrl = wire.ScanID, wire.ReportURL
+		if err := json.Unmarshal(data, &decoded.Result); err != nil {
+			return err
+		}
+		if wire.IssuesCount != nil {
+			decoded.Result.NumberOfIssues = *wire.IssuesCount
+		}
+	}
+	*r = StatusResult(decoded)
+	return nil
+}
+
 func execGitCommand(args []string) (string, error) {
+	if slog.Std().Level.ShouldHandling(slog.DebugLevel) {
+		debugArgs := strings.Join(args, " ")
+		slog.Debug("running git command",
+			"command", "git "+debugArgs,
+		)
+	}
 	cmd := exec.Command("git", args...)
 	output, err := cmd.Output()
 	if err != nil {
@@ -44,6 +92,26 @@ func execGitCommand(args []string) (string, error) {
 		return "", err
 	}
 	return string(output), nil
+}
+
+func currentRemoteBranch(remote string) (string, error) {
+	currentBranch, err := execGitCommand([]string{"branch", "--show-current"})
+	currentBranch = strings.Trim(currentBranch, "\n")
+	if err != nil {
+		return "", fmt.Errorf("show current branch error: %w", err)
+	}
+	slog.Debug("realizando push al remoto",
+		"remote", remote,
+		"currentBranch", currentBranch,
+	)
+	output, err := execGitCommand([]string{"push", remote, currentBranch})
+	if err != nil {
+		slog.Error("error en push",
+			"output", output,
+		)
+		return "", fmt.Errorf("push current branch error: %w", err)
+	}
+	return currentBranch, nil
 }
 
 func NewScanCommand() *cobra.Command {
@@ -57,10 +125,11 @@ func NewScanCommand() *cobra.Command {
 	cmd.Flags().StringP("commit", "c", "", "Commit hash to scan")
 	cmd.Flags().BoolP("staged", "s", false, "Staged files only")
 	cmd.Flags().BoolP("githook", "g", false, "Githook mode")
+	cmd.Flags().BoolP("full", "f", true, "Full scan")
 	return cmd
 }
 
-func RunScanAndWaitForCompletion(batchId string, repositoryURL string) (StatusResult, error) {
+func RunScanAndWaitForCompletion(batchId string, repositoryURL string, branch string) (StatusResult, error) {
 	// Registrar tiempo de inicio
 	startTime := time.Now()
 
@@ -68,6 +137,7 @@ func RunScanAndWaitForCompletion(batchId string, repositoryURL string) (StatusRe
 	runScanOutput, err := RunScan(&RunScanInput{
 		BatchId:       batchId,
 		RepositoryURL: repositoryURL,
+		Branch:        branch,
 	})
 	if err != nil {
 		return StatusResult{}, err
@@ -116,7 +186,7 @@ func RunScanAndWaitForCompletion(batchId string, repositoryURL string) (StatusRe
 				Result:    scanStatusOutput.Result.Result,
 			}
 			return result, nil
-		case "FAILED":
+		case "FAILED", "WARNING":
 
 			slog.Error("Escaneo finalizado con errores", "scan_id", scanID, "estado", scanStatusOutput.Status, "tiempo_total", formattedTime)
 
@@ -256,7 +326,7 @@ func openFileSecurely(filePath string, repoRoot string) (*secureFileInfo, error)
 }
 
 // uploadFilesAsGzipAndRun comprime la lista de archivos en un archivo gzip y lo sube usando una URL prefirmada
-func uploadFilesAsGzipAndRun(filesArray []string, scanBatchId string, repositoryUrl string, logEnabled bool, output string) error {
+func uploadFilesAsGzipAndRun(filesArray []string, scanBatchId string, repositoryUrl string, logEnabled bool, output string, branch string) error {
 	// Obtener el directorio raíz del repositorio
 	repoRoot, err := getRepoRoot()
 	if err != nil {
@@ -307,18 +377,30 @@ func uploadFilesAsGzipAndRun(filesArray []string, scanBatchId string, repository
 		slog.Info("Archivo comprimido subido exitosamente")
 
 		// Ejecutar el escaneo y esperar a que se complete
-		result, err := RunScanAndWaitForCompletion(scanBatchId, repositoryUrl)
-		if err != nil {
-			// Verificar si el error es por estado FAILED o WARNING
-			if result.Result.Status == "FAILED" || result.Result.Status == "WARNING" {
-				// Mostrar información del fallo pero no salir aquí (permite cleanup)
+		result, err := RunScanAndWaitForCompletion(scanBatchId, repositoryUrl, branch)
+		{
+			// Mostrar resultados terminales, incluso cuando el análisis fue incompleto.
+			if err == nil || result.Result.Status == "FAILED" || result.Result.Status == "WARNING" {
 				if logEnabled {
 					switch output {
 					case "markdown":
-						fmt.Println("# El escaneo finalizó con estado: FAILED")
+						fmt.Println("# El escaneo finalizó con estado:", result.Result.Status)
 						fmt.Println("Reporte:", result.ReportUrl)
 						fmt.Println("Número de issues:", result.Result.NumberOfIssues)
 						fmt.Println("Estado:", result.Result.Status)
+						if result.Result.Incomplete != nil {
+							fmt.Println("\n## Análisis incompleto")
+							fmt.Println(result.Result.Incomplete.Message)
+						}
+						if result.Result.Coverage != nil {
+							fmt.Println("Cobertura completa:", result.Result.Coverage.Complete)
+							for _, cause := range result.Result.Coverage.Errors {
+								fmt.Println("-", cause)
+							}
+						}
+						if result.Result.NumberOfIssues > 0 && len(result.Result.Annotations) == 0 {
+							fmt.Println("\nEl detalle de los hallazgos está disponible en el enlace del reporte; la respuesta no incluye anotaciones.")
+						}
 						for index, annotation := range result.Result.Annotations {
 							fmt.Println("## ", fmt.Sprintf("%02d", index+1), " - ", annotation.Title)
 							fmt.Println("- **Descripción:**", annotation.Description)
@@ -346,7 +428,10 @@ func uploadFilesAsGzipAndRun(filesArray []string, scanBatchId string, repository
 					fmt.Println(result.ReportUrl)
 				}
 				// Retornar un error especial que indique que se debe salir con código 1
-				return fmt.Errorf("SCAN_FAILED: %w", err)
+				if err != nil {
+					return fmt.Errorf("SCAN_FAILED: %w", err)
+				}
+				return nil
 			}
 			return err
 		}
@@ -376,6 +461,12 @@ func scan(cmd *cobra.Command, args []string) {
 		fmt.Println("Error: Debe proporcionar --output <formato>")
 		os.Exit(1)
 	}
+	full, err := cmd.Flags().GetBool("full")
+	if err != nil {
+		slog.Error("Error al obtener opción full scan", "error", err)
+		fmt.Println("Error: Debe proporcionar --full")
+		os.Exit(1)
+	}
 	commit, err := cmd.Flags().GetString("commit")
 	if err != nil {
 		slog.Error("Error al obtener el hash del commit", "error", err)
@@ -396,15 +487,15 @@ func scan(cmd *cobra.Command, args []string) {
 	}
 
 	// Verificar que se proporcione --commit o --staged
-	if commit == "" && !staged {
-		slog.Error("Debe especificar --commit o --staged")
-		fmt.Println("Error: Debe proporcionar --commit <hash> o --staged para ejecutar el escaneo")
+	if commit == "" && !staged && !full {
+		slog.Error("Debe especificar --commit, --staged o --full")
+		fmt.Println("Error: Debe proporcionar --commit <hash> , --staged o --full para ejecutar el escaneo")
 		os.Exit(1)
 	}
 
-	if commit != "" && staged {
-		slog.Error("No se puede especificar un commit y staged al mismo tiempo")
-		fmt.Println("Error: No se puede especificar un commit y staged al mismo tiempo")
+	if commit != "" && staged && full {
+		slog.Error("No se puede especificar un commit y staged o full al mismo tiempo")
+		fmt.Println("Error: No se puede especificar un commit y staged o full al mismo tiempo")
 		os.Exit(1)
 	}
 
@@ -414,6 +505,12 @@ func scan(cmd *cobra.Command, args []string) {
 	repositoryUrl, err := execGitCommand([]string{"remote", "get-url", remote})
 	if err != nil {
 		slog.Error("Error al obtener el URL del remote", "error", err)
+		os.Exit(1)
+	}
+
+	branch, err := currentRemoteBranch(remote)
+	if err != nil {
+		slog.Error("Error al obtener rama remota", "error", err)
 		os.Exit(1)
 	}
 
@@ -429,7 +526,7 @@ func scan(cmd *cobra.Command, args []string) {
 		filesArray := strings.Split(files, "\n")
 
 		// Subir archivos como gzip
-		if err := uploadFilesAsGzipAndRun(filesArray, scanBatchId, sanitizeRepositoryURL(repositoryUrl), logEnabled, output); err != nil {
+		if err := uploadFilesAsGzipAndRun(filesArray, scanBatchId, sanitizeRepositoryURL(repositoryUrl), logEnabled, output, branch); err != nil {
 			slog.Error("Error al subir los archivos", "error", err)
 			os.Exit(1)
 		}
@@ -461,7 +558,38 @@ func scan(cmd *cobra.Command, args []string) {
 
 		slog.Info("Generando lote de archivos:", scanBatchId, "cantidad", len(filteredFiles))
 		// Subir archivos como gzip
-		if err := uploadFilesAsGzipAndRun(filteredFiles, scanBatchId, sanitizeRepositoryURL(repositoryUrl), logEnabled, output); err != nil {
+		if err := uploadFilesAsGzipAndRun(filteredFiles, scanBatchId, sanitizeRepositoryURL(repositoryUrl), logEnabled, output, branch); err != nil {
+			slog.Error("Error al subir los archivos", "error", err)
+			os.Exit(1)
+		}
+
+		slog.Info("Proceso de escaneo completado")
+	} else if full {
+		slog.Info("Escaneo de archivos de todo el repositorio")
+
+		scanBatchId := uuid.NewString()
+		files, err := execGitCommand([]string{"ls-files"})
+		if err != nil {
+			slog.Error("Error al obtener los archivos del repositorio", "error", err)
+			os.Exit(1)
+		}
+		slog.Info("Generando lote de archivos:", scanBatchId)
+		// Filtrar la salida, ya que podría contener líneas vacías al inicio
+		var filteredFiles []string
+		for _, filePath := range strings.Split(files, "\n") {
+			if filePath != "" {
+				filteredFiles = append(filteredFiles, filePath)
+			}
+		}
+
+		if len(filteredFiles) == 0 {
+			slog.Error("No se encontraron archivos en el commit", "commit", commit)
+			os.Exit(1)
+		}
+
+		slog.Info("Generando lote de archivos:", scanBatchId, "cantidad", len(filteredFiles))
+		// Subir archivos como gzip
+		if err := uploadFilesAsGzipAndRun(filteredFiles, scanBatchId, sanitizeRepositoryURL(repositoryUrl), logEnabled, output, branch); err != nil {
 			slog.Error("Error al subir los archivos", "error", err)
 			os.Exit(1)
 		}

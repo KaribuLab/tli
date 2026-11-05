@@ -70,11 +70,29 @@ func getAPIConfig() (*Config, error) {
 	configPath := filepath.Join(homeDir, ".tli", "config.json")
 	config := &Config{}
 	if err := config.Load(configPath); err != nil {
+		// Sin archivo de configuración: usar variables de entorno (CI/contenedores)
+		if envConfig := configFromEnv(); envConfig != nil {
+			slog.Debug("Usando configuración desde variables de entorno")
+			return envConfig, nil
+		}
 		slog.Error("Error al cargar la configuración", "error", err)
 		return nil, err
 	}
 
 	return config, nil
+}
+
+// configFromEnv builds the config from TLI_USER_ID, TLI_API_KEY and
+// TLI_API_ENDPOINT. Returns nil unless all three are set. The values are the
+// same ones `tli setup` writes to ~/.tli/config.json.
+func configFromEnv() *Config {
+	userID := os.Getenv("TLI_USER_ID")
+	apiKey := os.Getenv("TLI_API_KEY")
+	apiEndpoint := os.Getenv("TLI_API_ENDPOINT")
+	if userID == "" || apiKey == "" || apiEndpoint == "" {
+		return nil
+	}
+	return NewConfig(userID, apiKey, apiEndpoint)
 }
 
 func UploadFilesAsGzip(params *UploadFilesAsGzipInput) error {

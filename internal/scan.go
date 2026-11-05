@@ -94,15 +94,58 @@ func execGitCommand(args []string) (string, error) {
 	return string(output), nil
 }
 
+// remoteBranchSHA returns the commit the branch points to on the remote, or an
+// empty string when the branch does not exist there.
+func remoteBranchSHA(remote string, branch string) (string, error) {
+	output, err := execGitCommand([]string{"ls-remote", "--heads", remote, "refs/heads/" + branch})
+	if err != nil {
+		return "", fmt.Errorf("ls-remote error: %w", err)
+	}
+	fields := strings.Fields(output)
+	if len(fields) == 0 {
+		return "", nil
+	}
+	return fields[0], nil
+}
+
+// currentRemoteBranch makes sure the current branch is published on the remote
+// at the local HEAD commit, so the server scans exactly what the user has.
+// It only pushes when the remote branch is missing or behind; in CI (Bitbucket,
+// GitHub Actions) the branch is already there, so no push is attempted.
 func currentRemoteBranch(remote string) (string, error) {
 	currentBranch, err := execGitCommand([]string{"branch", "--show-current"})
-	currentBranch = strings.Trim(currentBranch, "\n")
+	currentBranch = strings.TrimSpace(currentBranch)
 	if err != nil {
 		return "", fmt.Errorf("show current branch error: %w", err)
 	}
+	if currentBranch == "" {
+		return "", fmt.Errorf("no hay una rama activa (HEAD detached); haz checkout de una rama antes de escanear")
+	}
+
+	localSHA, err := execGitCommand([]string{"rev-parse", "HEAD"})
+	if err != nil {
+		return "", fmt.Errorf("rev-parse HEAD error: %w", err)
+	}
+	localSHA = strings.TrimSpace(localSHA)
+
+	remoteSHA, err := remoteBranchSHA(remote, currentBranch)
+	if err != nil {
+		return "", err
+	}
+	if remoteSHA == localSHA {
+		slog.Debug("rama ya publicada en el remoto, se omite push",
+			"remote", remote,
+			"currentBranch", currentBranch,
+			"sha", localSHA,
+		)
+		return currentBranch, nil
+	}
+
 	slog.Debug("realizando push al remoto",
 		"remote", remote,
 		"currentBranch", currentBranch,
+		"localSHA", localSHA,
+		"remoteSHA", remoteSHA,
 	)
 	output, err := execGitCommand([]string{"push", remote, currentBranch})
 	if err != nil {

@@ -23,6 +23,21 @@ Puedes usar [Task](https://taskfile.dev) para simplificar este proceso:
 task build
 ```
 
+### Imagen Docker
+
+Cada release publica una imagen multi-arquitectura (amd64/arm64) en Docker Hub:
+
+```bash
+docker pull karibu/tli:latest   # o karibu/tli:X.Y.Z
+docker run --rm karibu/tli:latest tli --version
+```
+
+Para construirla localmente:
+
+```bash
+docker build --build-arg VERSION=dev -t tli:local .
+```
+
 ## Configuración Inicial
 
 Antes de utilizar Titvo, debes configurarlo con tu cuenta:
@@ -71,6 +86,34 @@ tli scan --staged
 
 # Escanear archivos de un commit específico
 tli scan --commit abc123def456
+```
+
+## Uso en CI (Bitbucket Pipelines)
+
+La imagen incluye `bash`, `git` y certificados CA, por lo que puede usarse directamente como imagen base de un step.
+Como `tli setup` es interactivo, en CI la configuración se entrega por variables de entorno. Si no existe `~/.tli/config.json`,
+Titvo usa:
+
+| Variable           | Valor                                                   |
+|--------------------|---------------------------------------------------------|
+| `TLI_USER_ID`      | `user_id` de tu `~/.tli/config.json`                    |
+| `TLI_API_KEY`      | `api_key` de tu `~/.tli/config.json` (ya viene cifrada) |
+| `TLI_API_ENDPOINT` | `api_endpoint` de tu `~/.tli/config.json`               |
+
+Ejecuta `tli setup` una vez en tu máquina, copia los tres valores del archivo generado y guárdalos como
+variables seguras del repositorio en Bitbucket.
+
+```yaml
+image: karibu/tli:latest
+
+pipelines:
+  pull-requests:
+    '**':
+      - step:
+          name: Titvo security scan
+          script:
+            - tli --version
+            - tli scan --commit "$BITBUCKET_COMMIT"
 ```
 
 ## Integración con Git Hooks

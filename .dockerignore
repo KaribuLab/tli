@@ -1,0 +1,8 @@
+.git
+.github
+.task
+bin
+.env
+*.md
+LICENSE
+Taskfile.yaml

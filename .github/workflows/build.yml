@@ -174,3 +174,15 @@ jobs:
             bin/tli-windows-amd64.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  docker:
+    name: Publish Docker Image
+    needs: [create_tag, build]
+    # Los tags creados con GITHUB_TOKEN no disparan workflows por evento, así
+    # que la publicación se invoca como workflow reusable dentro de este run.
+    if: >-
+      !cancelled() && needs.build.result == 'success'
+    uses: ./.github/workflows/docker.yaml
+    with:
+      tag: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || needs.create_tag.outputs.tag }}
+    secrets: inherit

@@ -9,6 +9,9 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// version is set at build time via -ldflags "-X main.version=vX.Y.Z".
+var version = "dev"
+
 func NewRootCommand() *cobra.Command {
 	slog.Configure(func(logger *slog.SugaredLogger) {})
 	logLevel, ok := os.LookupEnv("TLI_LOG_LEVEL")
@@ -18,8 +21,10 @@ func NewRootCommand() *cobra.Command {
 		slog.SetLevelByName("fatal")
 	}
 	rootCmd := &cobra.Command{
-		Use: "tli",
+		Use:     "tli",
+		Version: version,
 	}
+	rootCmd.SetVersionTemplate("tli {{.Version}}\n")
 	// Add subcommands
 	rootCmd.AddCommand(internal.NewScanCommand())
 	rootCmd.AddCommand(internal.NewGitHookCommand())

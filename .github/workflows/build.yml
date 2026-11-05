@@ -65,13 +65,17 @@ jobs:
     needs: check_tag
     runs-on: ubuntu-latest
     if: needs.check_tag.outputs.tag_exists == 'false'
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.push_tags.outputs.tag }}
     steps:
     -
       name: Checkout
       uses: actions/checkout@v4
       with:
-        ssh-key: ${{ secrets.KARIBU_SSH_KEY }}
         fetch-depth: 0
+        persist-credentials: true
     -
       name: Set up Git user
       run: |
@@ -89,9 +93,17 @@ jobs:
       run: |
         chmod +x ./kli
         ./kli semver -t -v
+        TAG=$( git describe --tags --abbrev=0 )
+        echo "tag=$TAG"
+        echo "tag=$TAG" >> "$GITHUB_OUTPUT"
   build:
     name: Build and Release Binaries
-    if: startsWith(github.ref, 'refs/tags/v')
+    needs: create_tag
+    # Runs when a v* tag is pushed manually, or in the same run right after
+    # create_tag pushes one (a GITHUB_TOKEN tag push does not trigger a new run).
+    if: >-
+      !cancelled() &&
+      (startsWith(github.ref, 'refs/tags/v') || needs.create_tag.result == 'success')
     permissions:
       contents: write
       packages: write
@@ -99,7 +111,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref || needs.create_tag.outputs.tag }}
         
       - name: Set up Go
         uses: actions/setup-go@v4
@@ -108,21 +122,31 @@ jobs:
           
       - name: Get version from tag
         id: get_version
-        run: echo "RELEASE_VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
+        env:
+          CREATED_TAG: ${{ needs.create_tag.outputs.tag }}
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "RELEASE_VERSION=${GITHUB_REF#refs/tags/}" >> "$GITHUB_ENV"
+          else
+            echo "RELEASE_VERSION=${CREATED_TAG}" >> "$GITHUB_ENV"
+          fi
+          
+      - name: Set build flags
+        run: echo "LDFLAGS=-s -w -X main.version=${RELEASE_VERSION}" >> "$GITHUB_ENV"
           
       - name: Build for Linux
         run: |
-          GOOS=linux GOARCH=amd64 go build -o ./bin/tli-linux-amd64 ./cmd/tli
-          GOOS=linux GOARCH=arm64 go build -o ./bin/tli-linux-arm64 ./cmd/tli
+          GOOS=linux GOARCH=amd64 go build -ldflags "$LDFLAGS" -o ./bin/tli-linux-amd64 ./cmd/tli
+          GOOS=linux GOARCH=arm64 go build -ldflags "$LDFLAGS" -o ./bin/tli-linux-arm64 ./cmd/tli
         
       - name: Build for macOS
         run: |
-          GOOS=darwin GOARCH=amd64 go build -o ./bin/tli-darwin-amd64 ./cmd/tli
-          GOOS=darwin GOARCH=arm64 go build -o ./bin/tli-darwin-arm64 ./cmd/tli
+          GOOS=darwin GOARCH=amd64 go build -ldflags "$LDFLAGS" -o ./bin/tli-darwin-amd64 ./cmd/tli
+          GOOS=darwin GOARCH=arm64 go build -ldflags "$LDFLAGS" -o ./bin/tli-darwin-arm64 ./cmd/tli
         
       - name: Build for Windows
         run: |
-          GOOS=windows GOARCH=amd64 go build -o ./bin/tli-windows-amd64.exe ./cmd/tli
+          GOOS=windows GOARCH=amd64 go build -ldflags "$LDFLAGS" -o ./bin/tli-windows-amd64.exe ./cmd/tli
       
       - name: Compress binaries
         run: |
@@ -138,6 +162,7 @@ jobs:
         id: create_release
         uses: softprops/action-gh-release@v1
         with:
+          tag_name: ${{ env.RELEASE_VERSION }}
           name: Release ${{ env.RELEASE_VERSION }}
           draft: false
           prerelease: false

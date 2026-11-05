@@ -90,31 +90,64 @@ tli scan --commit abc123def456
 
 ## Uso en CI (Bitbucket Pipelines)
 
-La imagen incluye `bash`, `git` y certificados CA, por lo que puede usarse directamente como imagen base de un step.
-Como `tli setup` es interactivo, en CI la configuración se entrega por variables de entorno. Si no existe `~/.tli/config.json`,
-Titvo usa:
+La imagen incluye `bash`, `git` y certificados CA, por lo que puede usarse como imagen de un step.
 
-| Variable           | Valor                                                   |
-|--------------------|---------------------------------------------------------|
-| `TLI_USER_ID`      | `user_id` de tu `~/.tli/config.json`                    |
-| `TLI_API_KEY`      | `api_key` de tu `~/.tli/config.json` (ya viene cifrada) |
-| `TLI_API_ENDPOINT` | `api_endpoint` de tu `~/.tli/config.json`               |
+`tli setup` **no se ejecuta en CI**: es interactivo y genera `~/.tli/config.json`, que en un contenedor
+efímero se perdería. En su lugar, cuando ese archivo no existe, Titvo lee la configuración de variables de
+entorno y envía la API key tal cual (sin cifrar); el servidor la valida directamente, igual que hace con la
+GitHub Action.
 
-Ejecuta `tli setup` una vez en tu máquina, copia los tres valores del archivo generado y guárdalos como
-variables seguras del repositorio en Bitbucket.
+| Variable           | Valor                                                                    |
+|--------------------|--------------------------------------------------------------------------|
+| `TLI_API_KEY`      | API key en claro (`tvok-...`), la misma que pedirías en `tli setup`       |
+| `TLI_API_ENDPOINT` | URL base del API de tareas (`.../v1`), la misma que usa la GitHub Action  |
+
+No hace falta ID de usuario: los escaneos se autentican solo con la API key.
+
+Si prefieres reutilizar el `api_key` cifrado de un `~/.tli/config.json`, también funciona: pon el valor
+con el prefijo `ENC:` en `TLI_API_KEY`.
+
+### 1. Obtener los valores
+
+- **API key**: la entrega el administrador de Titvo (consola de administración o instalador).
+- **Endpoint**: la URL base del API de tareas de tu instalación de Titvo.
+
+### 2. Guardarlos en Bitbucket
+
+En el repositorio: **Repository settings → Pipelines → Repository variables**. Crea `TLI_API_KEY`
+(marcada como **Secured**) y `TLI_API_ENDPOINT`. También pueden definirse a nivel de workspace
+(**Workspace settings → Pipelines → Workspace variables**) para compartirlas entre repositorios, o como
+*Deployment variables* si quieres acotarlas a un entorno.
+
+Bitbucket inyecta esas variables como variables de entorno en todos los steps del pipeline; no hay que
+declararlas en el YAML. Titvo las toma automáticamente.
+
+### 3. Pipeline
+
+`image` puede declararse a nivel de step, de modo que solo ese step use la imagen de Titvo y el resto del
+pipeline conserve su propia imagen:
 
 ```yaml
-image: karibu/tli:latest
+image: node:20   # imagen por defecto del pipeline
 
 pipelines:
   pull-requests:
     '**':
       - step:
+          name: Build
+          script:
+            - npm ci
+            - npm test
+      - step:
           name: Titvo security scan
+          image: karibu/tli:latest   # solo este step
           script:
             - tli --version
             - tli scan --commit "$BITBUCKET_COMMIT"
 ```
+
+Si prefieres no exponer las credenciales al resto de los steps, usa *Deployment variables* y marca el step
+con `deployment: <nombre>`; Bitbucket solo las inyecta en ese step.
 
 ## Integración con Git Hooks
 

@@ -1,13 +1,16 @@
 package internal
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/gookit/slog"
@@ -279,6 +282,43 @@ type secureFileInfo struct {
 }
 
 // openFileSecurely valida y abre un archivo de forma segura para incluir en el tar
+// binarySniffSize is how many leading bytes are inspected to decide whether a
+// file is binary, the same window git uses.
+const binarySniffSize = 8000
+
+// isBinaryFile reports whether the file looks binary: a NUL byte or invalid
+// UTF-8 within the first binarySniffSize bytes. The read offset is restored
+// to the beginning of the file afterwards.
+func isBinaryFile(file *os.File) (bool, error) {
+	buf := make([]byte, binarySniffSize)
+	n, err := io.ReadFull(file, buf)
+	if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+		return false, err
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return false, err
+	}
+	return isBinaryContent(buf[:n], n == binarySniffSize), nil
+}
+
+// isBinaryContent applies the heuristic to a chunk. When truncated is true the
+// chunk may end mid-rune, so an incomplete trailing sequence is tolerated.
+func isBinaryContent(chunk []byte, truncated bool) bool {
+	if bytes.IndexByte(chunk, 0) != -1 {
+		return true
+	}
+	if truncated {
+		// Drop a possibly incomplete multi-byte rune at the end (max 3 bytes).
+		for i := 0; i < 3 && len(chunk) > 0; i++ {
+			if utf8.Valid(chunk) {
+				break
+			}
+			chunk = chunk[:len(chunk)-1]
+		}
+	}
+	return !utf8.Valid(chunk)
+}
+
 func openFileSecurely(filePath string, repoRoot string) (*secureFileInfo, error) {
 	// Limpiar y normalizar la ruta
 	cleanPath := filepath.Clean(filePath)
@@ -353,6 +393,20 @@ func openFileSecurely(filePath string, repoRoot string) (*secureFileInfo, error)
 			"modtime_original", fileInfo.ModTime(),
 			"modtime_actual", statInfo.ModTime())
 		return nil, nil // nil sin error indica archivo omitido por seguridad
+	}
+
+	// Omitir archivos binarios (imágenes, ejecutables, etc.): el analizador
+	// solo procesa texto y falla al decodificarlos como UTF-8.
+	binary, err := isBinaryFile(file)
+	if err != nil {
+		file.Close()
+		slog.Error("Error al inspeccionar el contenido del archivo", "ruta", cleanPath, "error", err)
+		return nil, err
+	}
+	if binary {
+		file.Close()
+		slog.Info("Archivo omitido: contenido binario", "ruta", cleanPath)
+		return nil, nil // nil sin error indica archivo omitido
 	}
 
 	// Usar la ruta relativa normalizada como nombre en el tar

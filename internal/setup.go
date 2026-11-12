@@ -1,156 +1,90 @@
 package internal
 
 import (
-	"bytes"
-	"encoding/json"
+	"context"
 	"fmt"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 
-	"github.com/gookit/slog"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )
 
 func NewSetupCommand() *cobra.Command {
-	cmd := &cobra.Command{
-		Use: "setup",
-		Run: setup,
+	cmd := &cobra.Command{Use: "setup", SilenceUsage: true, SilenceErrors: true, Args: cobra.NoArgs}
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		in, out := cmd.InOrStdin(), cmd.OutOrStdout()
+		ctx := cmd.Context()
+		fmt.Fprint(out, "Ingrese la URL de su API: ")
+		endpoint, e := readInputLine(ctx, in)
+		if e != nil {
+			return e
+		}
+		if !safeHTTPS(endpoint) {
+			return fmt.Errorf("la URL debe ser HTTPS y no contener credenciales")
+		}
+		fmt.Fprint(out, "Ingrese su ID de usuario: ")
+		user, e := readInputLine(ctx, in)
+		if e != nil {
+			return e
+		}
+		if user == "" {
+			return fmt.Errorf("el ID de usuario es obligatorio")
+		}
+		f, ok := in.(*os.File)
+		if !ok || !term.IsTerminal(int(f.Fd())) {
+			return fmt.Errorf("setup requiere terminal para introducir la clave sin mostrarla; en CI usa TLI_API_*")
+		}
+		fmt.Fprint(out, "Ingrese su API Key: ")
+		key, e := readPasswordContext(ctx, f)
+		fmt.Fprintln(out)
+		if e != nil {
+			return e
+		}
+		if len(key) == 0 {
+			return fmt.Errorf("la clave es obligatoria")
+		}
+		client := &APIClient{Config: Config{APIEndpoint: strings.TrimRight(endpoint, "/"), APIKey: string(key)}}
+		var response struct {
+			TaskEndpoint    string `json:"task_endpoint"`
+			EncryptedAPIKey string `json:"encrypted_api_key"`
+		}
+		if e = client.post(ctx, "/auth/setup", map[string]any{"source": "cli", "args": map[string]string{"user_id": user}}, &response); e != nil {
+			return e
+		}
+		if !safeHTTPS(response.TaskEndpoint) || response.EncryptedAPIKey == "" {
+			return fmt.Errorf("respuesta de configuración incompleta")
+		}
+		home, e := os.UserHomeDir()
+		if e != nil {
+			return e
+		}
+		path := filepath.Join(home, ".tli", "config.json")
+		if e = os.MkdirAll(filepath.Dir(path), 0700); e != nil {
+			return e
+		}
+		if e = NewConfig(user, response.EncryptedAPIKey, response.TaskEndpoint).Save(path); e != nil {
+			return e
+		}
+		fmt.Fprintln(out, "Configuración guardada en ~/.tli/config.json")
+		return nil
 	}
 	return cmd
 }
-
-func fillWithDots(apiKey string) string {
-	result := ""
-	repeat := len(apiKey) - 7
-	if repeat > 0 {
-		for range repeat {
-			result += "."
+func readPasswordContext(ctx context.Context, file *os.File) (key []byte, err error) {
+	state, e := term.MakeRaw(int(file.Fd()))
+	if e != nil {
+		return nil, fmt.Errorf("no se pudo proteger la entrada de contraseña")
+	}
+	defer func() {
+		if restoreErr := term.Restore(int(file.Fd()), state); restoreErr != nil && err == nil {
+			err = fmt.Errorf("no se pudo restaurar el terminal")
 		}
-		result = apiKey[0:4] + result + apiKey[len(apiKey)-3:]
-	} else {
-		for range len(apiKey) {
-			result += "."
-		}
+	}()
+	value, e := readInputValue(ctx, file, true)
+	if e != nil {
+		return nil, e
 	}
-	return result
-}
-
-func setup(cmd *cobra.Command, args []string) {
-	slog.Info("Configurando Titvo Security...")
-	var apiEndpoint string
-	fmt.Print("Ingrese la URL de su API: ")
-	// Validar que la URL sea HTTPS
-	fmt.Scanln(&apiEndpoint)
-	if !strings.HasPrefix(apiEndpoint, "https://") {
-		slog.Error("La URL debe comenzar con https://")
-		os.Exit(1)
-	}
-	if strings.TrimSpace(apiEndpoint) == "" {
-		slog.Error("La URL de la API es obligatoria")
-		os.Exit(1)
-	}
-	fmt.Print("Ingrese su ID de usuario: ")
-	var userId string
-	fmt.Scanln(&userId)
-	if strings.TrimSpace(userId) == "" {
-		slog.Error("El ID de usuario es obligatorio")
-		os.Exit(1)
-	}
-	fmt.Print("Ingrese su API Key: ")
-	apiKey, err := term.ReadPassword(int(os.Stdin.Fd()))
-	if err != nil {
-		slog.Error("Error al leer API Key:", err)
-		os.Exit(1)
-	}
-	fmt.Println()
-	// Aquí puedes usar el apiKey
-	stringApiKey := string(apiKey)
-	stringUserId := string(strings.TrimSpace(userId))
-
-	slog.Info("ID recibido correctamente: ", stringUserId)
-	slog.Info("API Key recibida correctamente: ", fillWithDots(stringApiKey))
-
-	// Crear y enviar la petición HTTP
-	setupEndpoint := apiEndpoint + "/auth/setup"
-
-	slog.Debug("Endpoint de setup:", setupEndpoint)
-
-	// Preparar los datos para enviar
-	requestData := map[string]interface{}{
-		"source": "cli",
-		"args": map[string]string{
-			"user_id": stringUserId,
-		},
-	}
-
-	jsonData, err := json.Marshal(requestData)
-	if err != nil {
-		slog.Error("Error al preparar datos para la petición:", err)
-		os.Exit(1)
-	}
-
-	// Crear la petición HTTP
-	req, err := http.NewRequest("POST", setupEndpoint, bytes.NewBuffer(jsonData))
-	if err != nil {
-		slog.Error("Error al crear la petición HTTP:", err)
-		os.Exit(1)
-	}
-
-	// Establecer headers
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("x-api-key", stringApiKey)
-
-	// Enviar la petición
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		slog.Error("Error al enviar la petición HTTP:", err)
-		os.Exit(1)
-	}
-	defer resp.Body.Close()
-
-	var encryptedApiKey string
-	var taskEndpoint string
-
-	// Verificar respuesta
-	if resp.StatusCode != http.StatusOK {
-		// Extraer mensaje de error del cuerpo JSON
-		var errorResponse map[string]interface{}
-		if err := json.NewDecoder(resp.Body).Decode(&errorResponse); err == nil {
-			if message, ok := errorResponse["message"].(string); ok {
-				slog.Error("Error en la respuesta del servidor:", resp.Status, "- Mensaje:", message)
-				os.Exit(1)
-			}
-		}
-		// Si no se pudo extraer un mensaje o no había uno en el cuerpo, mostrar error genérico
-		slog.Error("Error en la respuesta del servidor:", resp.Status)
-		os.Exit(1)
-	}
-
-	slog.Info("Verificación con el servidor completada exitosamente")
-	var response map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&response); err == nil {
-		taskEndpoint = response["task_endpoint"].(string)
-		encryptedApiKey = response["encrypted_api_key"].(string)
-		slog.Info("Endpoint de la tarea:", taskEndpoint)
-	} else {
-		slog.Error("Error al decodificar la respuesta del servidor:", err)
-		os.Exit(1)
-	}
-
-	slog.Info("Verificación con el servidor completada exitosamente")
-
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		slog.Error("Error al obtener el directorio home:", err)
-		os.Exit(1)
-	}
-	filePath := filepath.Join(homeDir, ".tli", "config.json")
-	os.MkdirAll(filepath.Dir(filePath), 0755)
-	config := NewConfig(stringUserId, encryptedApiKey, taskEndpoint)
-	config.Save(filePath)
-	slog.Info("Configuración completada exitosamente. Archivo guardado en: ", filePath)
+	return []byte(value), nil
 }

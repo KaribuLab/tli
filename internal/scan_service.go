@@ -3,6 +3,8 @@ package internal
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/google/uuid"
@@ -47,6 +49,14 @@ func (s ScanService) Scan(ctx context.Context, o ScanOptions, confirmed string, 
 		return result, e
 	}
 	defer snapshot.Close()
+	manifest, e := MarshalScanManifest(plan)
+	if e != nil {
+		return result, e
+	}
+	manifestPath := filepath.Join(snapshot.Directory, ScanManifestName)
+	if e = os.WriteFile(manifestPath, manifest, 0600); e != nil {
+		return result, e
+	}
 	client := s.API
 	if client == nil {
 		config, e := getAPIConfig()
@@ -61,11 +71,17 @@ func (s ScanService) Scan(ctx context.Context, o ScanOptions, confirmed string, 
 	for _, f := range plan.Files {
 		names = append(names, f.Path)
 	}
-	u, e := client.Presign(ctx, batch, "snapshot.tar.gz", names)
+	urls, e := client.Presign(ctx, batch, []PresignUpload{
+		{Name: "snapshot.tar.gz", ContentType: "application/x-tar+gzip"},
+		{Name: ScanManifestName, ContentType: "application/json"},
+	}, names)
 	if e != nil {
 		return result, e
 	}
-	if e = client.Upload(ctx, u, snapshot.ArchivePath); e != nil {
+	if e = client.Upload(ctx, urls["snapshot.tar.gz"], snapshot.ArchivePath); e != nil {
+		return result, e
+	}
+	if e = client.Upload(ctx, urls[ScanManifestName], manifestPath); e != nil {
 		return result, e
 	}
 	id, e := client.Start(ctx, RunScanInput{BatchId: batch, RepositoryURL: plan.Repository.URL, Branch: plan.Repository.Branch})

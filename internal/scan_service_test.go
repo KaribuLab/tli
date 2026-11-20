@@ -25,16 +25,26 @@ func testService(t *testing.T, failUpload bool) (ScanService, *int, *int) {
 					Files []struct {
 						Name string `json:"name"`
 					} `json:"files"`
+					OriginalFiles []string `json:"original_files"`
 				} `json:"args"`
 			}
 			if e := json.NewDecoder(r.Body).Decode(&body); e != nil {
 				t.Error(e)
 			}
-			if len(body.Args.Files) != 1 {
-				t.Fatal("missing archive")
+			if len(body.Args.Files) != 2 {
+				t.Fatalf("want archive+manifest, got %+v", body.Args.Files)
 			}
-			json.NewEncoder(w).Encode(map[string]any{"presigned_urls": map[string]string{body.Args.Files[0].Name: server.URL + "/upload"}})
-		case "/upload":
+			for _, name := range body.Args.OriginalFiles {
+				if name == ScanManifestName {
+					t.Fatal("manifest listed in original_files")
+				}
+			}
+			urls := map[string]string{}
+			for _, f := range body.Args.Files {
+				urls[f.Name] = server.URL + "/upload/" + f.Name
+			}
+			json.NewEncoder(w).Encode(map[string]any{"presigned_urls": urls})
+		case "/upload/snapshot.tar.gz", "/upload/" + ScanManifestName:
 			if failUpload {
 				http.Error(w, "fixture failure", 500)
 				return
@@ -90,7 +100,7 @@ func TestServiceUploadsOnceAndCleans(t *testing.T) {
 	temp := t.TempDir()
 	s.Snapshots.TempRoot = temp
 	r, e := s.Scan(context.Background(), optionsFor(work, ScopeStaged), "", nil)
-	if e != nil || r.ScanID != "scan-fixture" || *starts != 1 || *requests != 4 {
+	if e != nil || r.ScanID != "scan-fixture" || *starts != 1 || *requests != 5 {
 		t.Fatalf("r=%+v err=%v req=%d starts=%d", r, e, *requests, *starts)
 	}
 	files, _ := os.ReadDir(temp)

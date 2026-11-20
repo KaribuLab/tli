@@ -111,8 +111,8 @@ func TestCLIEndToEndLocalServer(t *testing.T) {
 			server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch r.URL.Path {
 				case "/cli-files":
-					fmt.Fprintf(w, `{"presigned_urls":{"snapshot.tar.gz":%q}}`, server.URL+"/upload")
-				case "/upload":
+					fmt.Fprintf(w, `{"presigned_urls":{"snapshot.tar.gz":%q,"scan-manifest.json":%q}}`, server.URL+"/upload-archive", server.URL+"/upload-manifest")
+				case "/upload-archive":
 					if r.Header.Get("X-API-Key") != "" {
 						t.Error("key leaked to PUT")
 					}
@@ -138,6 +138,32 @@ func TestCLIEndToEndLocalServer(t *testing.T) {
 							t.Error(e)
 						}
 						archive[h.Name] = string(b)
+					}
+				case "/upload-manifest":
+					if r.Header.Get("X-API-Key") != "" {
+						t.Error("key leaked to PUT")
+					}
+					b, e := io.ReadAll(r.Body)
+					if e != nil {
+						t.Error(e)
+						return
+					}
+					var man struct {
+						Scope string `json:"scope"`
+						Files []struct {
+							Path string `json:"path"`
+						} `json:"files"`
+						FocusFiles []string `json:"focus_files"`
+					}
+					if e := json.Unmarshal(b, &man); e != nil {
+						t.Error(e)
+						return
+					}
+					if string(man.Scope) != string(tc.scope) || len(man.Files) == 0 {
+						t.Errorf("manifest=%s", b)
+					}
+					if _, ok := archive["scan-manifest.json"]; ok {
+						t.Error("manifest leaked into tar")
 					}
 				case "/run-scan":
 					starts.Add(1)
@@ -180,11 +206,7 @@ func TestCLIEndToEndLocalServer(t *testing.T) {
 			if archive["main.go"] != tc.content {
 				t.Fatalf("wrong snapshot: %v", archive)
 			}
-			wantFiles := 1
-			if tc.scope == ScopeFull {
-				wantFiles = 2
-			}
-			if len(archive) != wantFiles {
+			if len(archive) != 2 {
 				t.Fatal(archive)
 			}
 			for _, s := range []string{out.String(), diagnostic.String()} {
@@ -210,8 +232,8 @@ func TestCLIInterruptDuringWait(t *testing.T) {
 	server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/cli-files":
-			fmt.Fprintf(w, `{"presigned_urls":{"snapshot.tar.gz":%q}}`, server.URL+"/upload")
-		case "/upload":
+			fmt.Fprintf(w, `{"presigned_urls":{"snapshot.tar.gz":%q,"scan-manifest.json":%q}}`, server.URL+"/upload-archive", server.URL+"/upload-manifest")
+		case "/upload-archive", "/upload-manifest":
 			io.Copy(io.Discard, r.Body)
 		case "/run-scan":
 			fmt.Fprint(w, `{"scan_id":"scan-running"}`)

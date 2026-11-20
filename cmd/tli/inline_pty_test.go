@@ -129,8 +129,8 @@ func runInlinePTY(t *testing.T, mode string) {
 		requests.Add(1)
 		switch r.URL.Path {
 		case "/cli-files":
-			fmt.Fprintf(w, `{"presigned_urls":{"snapshot.tar.gz":%q}}`, server.URL+"/upload")
-		case "/upload":
+			fmt.Fprintf(w, `{"presigned_urls":{"snapshot.tar.gz":%q,"scan-manifest.json":%q}}`, server.URL+"/upload-archive", server.URL+"/upload-manifest")
+		case "/upload-archive", "/upload-manifest":
 			io.Copy(io.Discard, r.Body)
 		case "/run-scan":
 			starts.Add(1)

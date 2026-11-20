@@ -134,19 +134,31 @@ func (c *APIClient) post(ctx context.Context, path string, payload any, dest any
 	}
 	return nil
 }
-func (c *APIClient) Presign(ctx context.Context, batchID, name string, originals []string) (string, error) {
-	payload := map[string]any{"source": "cli", "args": map[string]any{"batch_id": batchID, "files": []map[string]string{{"name": name, "content_type": "application/x-tar+gzip"}}, "original_files": originals}}
+type PresignUpload struct {
+	Name, ContentType string
+}
+
+func (c *APIClient) Presign(ctx context.Context, batchID string, uploads []PresignUpload, originals []string) (map[string]string, error) {
+	files := make([]map[string]string, 0, len(uploads))
+	for _, u := range uploads {
+		files = append(files, map[string]string{"name": u.Name, "content_type": u.ContentType})
+	}
+	payload := map[string]any{"source": "cli", "args": map[string]any{"batch_id": batchID, "files": files, "original_files": originals}}
 	var r struct {
 		URLs map[string]string `json:"presigned_urls"`
 	}
 	if err := c.post(ctx, "/cli-files", payload, &r); err != nil {
-		return "", err
+		return nil, err
 	}
-	u := r.URLs[name]
-	if !safeHTTPS(u) {
-		return "", fmt.Errorf("URL de subida no válida")
+	out := make(map[string]string, len(uploads))
+	for _, u := range uploads {
+		url := r.URLs[u.Name]
+		if !safeHTTPS(url) {
+			return nil, fmt.Errorf("URL de subida no válida")
+		}
+		out[u.Name] = url
 	}
-	return u, nil
+	return out, nil
 }
 func (c *APIClient) Upload(ctx context.Context, u, path string) error {
 	f, err := os.Open(path)

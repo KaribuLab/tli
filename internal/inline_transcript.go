@@ -80,7 +80,7 @@ func RenderInlineAction(m InlineModel, c TerminalOptions) string {
 	return SafeTerminalText(text)
 }
 func RenderInlinePreview(p ScanPlan, c TerminalOptions) string {
-	lines := []string{inlineLiteral(c, fmt.Sprintf("%d incluidos · %d excluidos · %d bytes", len(p.Files), len(p.Excluded), p.TotalBytes))}
+	lines := []string{inlineLiteral(c, fmt.Sprintf("%d incluidos · foco %d · %d excluidos · %d bytes", len(p.Files), len(p.FocusFiles), len(p.Excluded), p.TotalBytes))}
 	for _, f := range p.Files[:min(5, len(p.Files))] {
 		lines = append(lines, fmt.Sprintf("  %q (%d B)", f.Path, f.Size))
 	}

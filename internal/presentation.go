@@ -75,7 +75,7 @@ func writePlanRaw(out io.Writer, p ScanPlan, format string) error {
 	if format != "markdown" {
 		return fmt.Errorf("formato no válido")
 	}
-	if _, e := fmt.Fprintf(out, "Repositorio: %s\nRama: %s · alcance: %s\nIncluidos: %d archivos · %d bytes\nExcluidos: %d\n", p.Repository.URL, p.Repository.Branch, p.Scope, len(p.Files), p.TotalBytes, len(p.Excluded)); e != nil {
+	if _, e := fmt.Fprintf(out, "Repositorio: %s\nRama: %s · alcance: %s\nIncluidos: %d archivos · %d bytes\nFoco: %d archivos\nExcluidos: %d\n", p.Repository.URL, p.Repository.Branch, p.Scope, len(p.Files), p.TotalBytes, len(p.FocusFiles), len(p.Excluded)); e != nil {
 		return e
 	}
 	for _, f := range p.Files {

@@ -57,6 +57,9 @@ func TestPlanCommitUsesCommittedBytes(t *testing.T) {
 		t.Fatal(e)
 	}
 	assertPlanContent(t, p, "main.go", "committed")
+	if len(p.FocusFiles) != 1 || p.FocusFiles[0] != "main.go" {
+		t.Fatalf("focus=%v", p.FocusFiles)
+	}
 }
 func TestPlanStagedUsesIndexBytes(t *testing.T) {
 	work, _ := sourceFixture(t)
@@ -65,6 +68,9 @@ func TestPlanStagedUsesIndexBytes(t *testing.T) {
 		t.Fatal(e)
 	}
 	assertPlanContent(t, p, "main.go", "indexed")
+	if len(p.FocusFiles) != 1 || p.FocusFiles[0] != "main.go" {
+		t.Fatalf("focus=%v", p.FocusFiles)
+	}
 }
 func TestPlanFullUsesTrackedWorkingTree(t *testing.T) {
 	work, _ := sourceFixture(t)
@@ -74,6 +80,9 @@ func TestPlanFullUsesTrackedWorkingTree(t *testing.T) {
 		t.Fatal(e)
 	}
 	assertPlanContent(t, p, "main.go", "working")
+	if len(p.FocusFiles) != 0 {
+		t.Fatalf("full focus=%v", p.FocusFiles)
+	}
 	for _, f := range p.Files {
 		if f.Path == "untracked" {
 			t.Fatal("untracked included")
@@ -101,8 +110,10 @@ func TestPlanRootMergeAndRename(t *testing.T) {
 		t.Fatal(e)
 	}
 	assertPlanContent(t, p, "feature.go", "feature.go")
-	if len(p.Files) != 1 {
-		t.Fatalf("merge scope=%+v", p.Files)
+	assertPlanContent(t, p, "main.go", "main.go")
+	assertPlanContent(t, p, "a.txt", "a.txt")
+	if len(p.FocusFiles) != 1 || p.FocusFiles[0] != "feature.go" {
+		t.Fatalf("merge focus=%v files=%+v", p.FocusFiles, p.Files)
 	}
 	runGit(t, work, "mv", "a.txt", "renamed.txt")
 	runGit(t, work, "commit", "-m", "rename")
@@ -111,8 +122,11 @@ func TestPlanRootMergeAndRename(t *testing.T) {
 		t.Fatal(e)
 	}
 	assertPlanContent(t, p, "renamed.txt", "a.txt")
-	if len(p.Excluded) != 1 || p.Excluded[0].Reason != "deleted" {
+	if len(p.Excluded) != 1 || p.Excluded[0].Path != "a.txt" || p.Excluded[0].Reason != "deleted" {
 		t.Fatalf("deleted not recorded: %+v", p.Excluded)
+	}
+	if len(p.FocusFiles) != 2 || p.FocusFiles[0] != "a.txt" || p.FocusFiles[1] != "renamed.txt" {
+		t.Fatalf("rename focus=%v", p.FocusFiles)
 	}
 }
 func TestPlanNULSafePaths(t *testing.T) {
@@ -203,7 +217,7 @@ type changingIndexRunner struct {
 
 func (r *changingIndexRunner) Run(ctx context.Context, dir string, args ...string) ([]byte, error) {
 	out, e := (ExecGitRunner{}).Run(ctx, dir, args...)
-	if !r.changed && ((args[0] == "ls-files") || (args[0] == "diff" && strings.Contains(strings.Join(args, " "), "--raw"))) {
+	if !r.changed && args[0] == "diff" && strings.Contains(strings.Join(args, " "), "--raw") {
 		r.changed = true
 		fixtureWrite(r.t, dir, "a.txt", "a.txt")
 		runGit(r.t, dir, "add", "a.txt")
@@ -225,8 +239,9 @@ func TestStagedPlanNeverMixesIndexVersions(t *testing.T) {
 		t.Fatal(e)
 	}
 	assertPlanContent(t, p, "a.txt", "prepared-a")
-	if len(p.Files) != 1 {
-		t.Fatal(p.Files)
+	assertPlanContent(t, p, "c.go", "HEAD-c")
+	if len(p.FocusFiles) != 1 || p.FocusFiles[0] != "a.txt" {
+		t.Fatalf("focus=%v files=%+v", p.FocusFiles, p.Files)
 	}
 }
 func TestPlanReadErrorIsNotExclusion(t *testing.T) {

@@ -39,19 +39,34 @@ func TestSnapshotArchiveMatchesPlan(t *testing.T) {
 	}
 	defer gz.Close()
 	tr := tar.NewReader(gz)
-	h, e := tr.Next()
-	if e != nil {
-		t.Fatal(e)
+	got := map[string]string{}
+	for {
+		h, e := tr.Next()
+		if e == io.EOF {
+			break
+		}
+		if e != nil {
+			t.Fatal(e)
+		}
+		data, e := io.ReadAll(tr)
+		if e != nil {
+			t.Fatal(e)
+		}
+		got[h.Name] = string(data)
 	}
-	data, e := io.ReadAll(tr)
-	if e != nil {
-		t.Fatal(e)
+	if len(got) != len(p.Files) {
+		t.Fatalf("members=%v plan=%+v", got, p.Files)
 	}
-	if h.Name != "main.go" || h.Size != 7 || string(data) != "indexed" {
-		t.Fatalf("header=%+v content=%q", h, data)
+	for _, f := range p.Files {
+		if got[f.Path] == "" && f.Size != 0 {
+			t.Fatalf("missing %s", f.Path)
+		}
+		if int64(len(got[f.Path])) != f.Size {
+			t.Fatalf("%s size", f.Path)
+		}
 	}
-	if _, e = tr.Next(); e != io.EOF {
-		t.Fatal("unexpected member")
+	if got["main.go"] != "indexed" {
+		t.Fatalf("main.go=%q", got["main.go"])
 	}
 }
 func TestSnapshotChangedWorkingTreeFails(t *testing.T) {

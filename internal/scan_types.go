@@ -34,10 +34,13 @@ type ScanPlan struct {
 	Repository  RepositoryIdentity
 	Scope       ScanScope
 	Files       []PlannedFile
+	FocusFiles  []string
 	Excluded    []ExcludedFile
 	TotalBytes  int64
 	Fingerprint string
 }
+
+const ScanManifestName = "scan-manifest.json"
 type ProgressEvent struct {
 	Phase, ScanID string
 	Files         int

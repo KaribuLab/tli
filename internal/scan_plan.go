@@ -83,6 +83,57 @@ func readWorking(root, path string, max int64) ([]byte, error) {
 	}
 	return data, nil
 }
+func parseLSTree(raw []byte) (map[string]gitEntry, error) {
+	entries := map[string]gitEntry{}
+	for _, line := range strings.Split(string(raw), "\x00") {
+		if line == "" {
+			continue
+		}
+		meta, path, ok := strings.Cut(line, "\t")
+		fields := strings.Fields(meta)
+		if !ok || len(fields) != 3 {
+			return nil, fmt.Errorf("árbol Git no válido")
+		}
+		entries[path] = gitEntry{path, fields[0], fields[2]}
+	}
+	return entries, nil
+}
+func parseLSFilesStage(raw []byte) (map[string]gitEntry, error) {
+	entries := map[string]gitEntry{}
+	for _, line := range strings.Split(string(raw), "\x00") {
+		if line == "" {
+			continue
+		}
+		meta, path, ok := strings.Cut(line, "\t")
+		fields := strings.Fields(meta)
+		if !ok || len(fields) != 3 {
+			return nil, fmt.Errorf("índice Git no válido")
+		}
+		if fields[2] != "0" {
+			return nil, fmt.Errorf("índice con conflictos sin resolver")
+		}
+		entries[path] = gitEntry{path, fields[0], fields[1]}
+	}
+	return entries, nil
+}
+func parseCachedRawFocus(raw []byte) (map[string]bool, error) {
+	focus := map[string]bool{}
+	records := strings.Split(string(raw), "\x00")
+	for i := 0; i < len(records) && records[i] != ""; i += 2 {
+		if i+1 >= len(records) {
+			return nil, fmt.Errorf("diff de índice no válido")
+		}
+		fields := strings.Fields(records[i])
+		if len(fields) != 5 || !strings.HasPrefix(fields[0], ":") {
+			return nil, fmt.Errorf("diff de índice no válido")
+		}
+		if fields[4] == "U" {
+			return nil, fmt.Errorf("índice con conflictos sin resolver")
+		}
+		focus[records[i+1]] = true
+	}
+	return focus, nil
+}
 func (p Planner) Plan(ctx context.Context, o ScanOptions) (ScanPlan, error) {
 	var plan ScanPlan
 	if e := ValidateLimits(o.Limits); e != nil {
@@ -98,24 +149,18 @@ func (p Planner) Plan(ctx context.Context, o ScanOptions) (ScanPlan, error) {
 	plan.Repository = id
 	plan.Scope = o.Scope
 	plan.Files = []PlannedFile{}
+	plan.FocusFiles = []string{}
 	plan.Excluded = []ExcludedFile{}
 	entries := map[string]gitEntry{}
-	selected := map[string]bool{}
+	focus := map[string]bool{}
 	if o.Scope == ScopeCommit {
 		raw, e := p.Git.run(ctx, id.Root, "ls-tree", "-r", "-z", id.Commit)
 		if e != nil {
 			return plan, e
 		}
-		for _, line := range strings.Split(string(raw), "\x00") {
-			if line == "" {
-				continue
-			}
-			meta, path, ok := strings.Cut(line, "\t")
-			fields := strings.Fields(meta)
-			if !ok || len(fields) != 3 {
-				return plan, fmt.Errorf("árbol Git no válido")
-			}
-			entries[path] = gitEntry{path, fields[0], fields[2]}
+		entries, e = parseLSTree(raw)
+		if e != nil {
+			return plan, e
 		}
 		parents, e := p.Git.run(ctx, id.Root, "rev-list", "--parents", "-n", "1", id.Commit)
 		if e != nil {
@@ -124,7 +169,7 @@ func (p Planner) Plan(ctx context.Context, o ScanOptions) (ScanPlan, error) {
 		parts := strings.Fields(string(parents))
 		if len(parts) == 1 {
 			for name := range entries {
-				selected[name] = true
+				focus[name] = true
 			}
 		} else {
 			raw, e = p.Git.run(ctx, id.Root, "diff", "--name-only", "--no-renames", "-z", parts[1], id.Commit, "--")
@@ -133,33 +178,8 @@ func (p Planner) Plan(ctx context.Context, o ScanOptions) (ScanPlan, error) {
 			}
 			for _, n := range strings.Split(string(raw), "\x00") {
 				if n != "" {
-					selected[n] = true
+					focus[n] = true
 				}
-			}
-		}
-	} else if o.Scope == ScopeStaged {
-		// A single raw diff yields each selected path, mode and immutable blob OID.
-		// Reading ls-files separately can mix different versions of a changing index.
-		raw, e := p.Git.run(ctx, id.Root, "diff", "--cached", "--raw", "--no-abbrev", "--no-renames", "-z", "--")
-		if e != nil {
-			return plan, e
-		}
-		records := strings.Split(string(raw), "\x00")
-		for i := 0; i < len(records) && records[i] != ""; i += 2 {
-			if i+1 >= len(records) {
-				return plan, fmt.Errorf("diff de índice no válido")
-			}
-			fields := strings.Fields(records[i])
-			if len(fields) != 5 || !strings.HasPrefix(fields[0], ":") {
-				return plan, fmt.Errorf("diff de índice no válido")
-			}
-			name := records[i+1]
-			selected[name] = true
-			if fields[4] == "U" {
-				return plan, fmt.Errorf("índice con conflictos sin resolver")
-			}
-			if fields[4] != "D" {
-				entries[name] = gitEntry{name, fields[1], fields[3]}
 			}
 		}
 	} else {
@@ -167,26 +187,34 @@ func (p Planner) Plan(ctx context.Context, o ScanOptions) (ScanPlan, error) {
 		if e != nil {
 			return plan, e
 		}
-		for _, line := range strings.Split(string(raw), "\x00") {
-			if line == "" {
-				continue
-			}
-			meta, path, ok := strings.Cut(line, "\t")
-			fields := strings.Fields(meta)
-			if !ok || len(fields) != 3 {
-				return plan, fmt.Errorf("índice Git no válido")
-			}
-			if fields[2] != "0" {
-				return plan, fmt.Errorf("índice con conflictos sin resolver")
-			}
-			entries[path] = gitEntry{path, fields[0], fields[1]}
+		entries, e = parseLSFilesStage(raw)
+		if e != nil {
+			return plan, e
 		}
-		for name := range entries {
-			selected[name] = true
+		if o.Scope == ScopeStaged {
+			raw, e = p.Git.run(ctx, id.Root, "diff", "--cached", "--raw", "--no-abbrev", "--no-renames", "-z", "--")
+			if e != nil {
+				return plan, e
+			}
+			focus, e = parseCachedRawFocus(raw)
+			if e != nil {
+				return plan, e
+			}
 		}
 	}
-	paths := make([]string, 0, len(selected))
-	for n := range selected {
+	focusPaths := make([]string, 0, len(focus))
+	for name := range focus {
+		focusPaths = append(focusPaths, name)
+	}
+	sort.Strings(focusPaths)
+	plan.FocusFiles = focusPaths
+	for _, name := range focusPaths {
+		if _, ok := entries[name]; !ok {
+			plan.Excluded = append(plan.Excluded, ExcludedFile{name, "deleted"})
+		}
+	}
+	paths := make([]string, 0, len(entries))
+	for n := range entries {
 		paths = append(paths, n)
 	}
 	sort.Strings(paths)
@@ -194,11 +222,7 @@ func (p Planner) Plan(ctx context.Context, o ScanOptions) (ScanPlan, error) {
 		if e := ctx.Err(); e != nil {
 			return plan, e
 		}
-		entry, exists := entries[name]
-		if !exists {
-			plan.Excluded = append(plan.Excluded, ExcludedFile{name, "deleted"})
-			continue
-		}
+		entry := entries[name]
 		mode := entry.mode
 		if o.Scope == ScopeFull && mode != "160000" {
 			info, e := os.Lstat(filepath.Join(id.Root, name))

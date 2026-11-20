@@ -155,8 +155,8 @@ func RenderInlineActive(model InlineModel, c TerminalOptions) InlineFrame {
 			add(literal("No hay preview disponible."))
 			break
 		}
-		lines := []string{literal(fmt.Sprintf("%s · %d archivos · %d bytes", scopeLabel(m.Options.Scope), len(m.Plan.Files), m.Plan.TotalBytes))}
-		lines = append(lines, WrapCells(literal("El código seleccionado se subirá a Titvo."), width)...)
+		lines := []string{literal(fmt.Sprintf("%s · %d archivos · foco %d · %d bytes", scopeLabel(m.Options.Scope), len(m.Plan.Files), len(m.Plan.FocusFiles), m.Plan.TotalBytes))}
+		lines = append(lines, WrapCells(literal("Se sube el repositorio completo (indexado) más el foco del alcance."), width)...)
 		lines = append(lines, literal("¿Iniciar este análisis?"))
 		choices := InlineActions(m)
 		hasBack, hasSend := false, false

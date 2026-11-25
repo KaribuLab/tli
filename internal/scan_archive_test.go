@@ -3,45 +3,26 @@ package internal
 import (
 	"archive/tar"
 	"compress/gzip"
+	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
-	"os"
-	"path/filepath"
+	"net/http/httptest"
 	"reflect"
-	"strings"
 	"testing"
 )
 
-type policyRoundTripper func(*http.Request) (*http.Response, error)
-
-func (f policyRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
-
 func TestPolicyArchiveTransport(t *testing.T) {
-	root := t.TempDir()
-	t.Setenv("HOME", root)
-	t.Setenv("TLI_API_KEY", "test-key")
-	t.Setenv("TLI_API_ENDPOINT", "https://api.invalid")
-	for name, content := range map[string]string{"main.go": "working tree source", ".titvoignore.yml": "version: 1\nexceptions: []\n"} {
-		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	files, err := collectScanFiles([]string{filepath.Join(root, "main.go"), filepath.Join(root, ".titvoignore.yml")}, root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
-		for _, f := range files {
-			f.File.Close()
-		}
-	}()
-	old := http.DefaultTransport
-	t.Cleanup(func() { http.DefaultTransport = old })
-	uploaded := false
-	http.DefaultTransport = policyRoundTripper(func(r *http.Request) (*http.Response, error) {
-		body := ""
-		if r.Method == "POST" {
+	_, root := newRepoWithRemote(t)
+	fixtureWrite(t, root, "main.go", "working tree source")
+	fixtureWrite(t, root, ".titvoignore.yml", "version: 1\nexceptions: []\n")
+	runGit(t, root, "add", "main.go", ".titvoignore.yml")
+	uploads, starts := 0, 0
+	var server *httptest.Server
+	server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/cli-files":
 			var req struct {
 				Args struct {
 					Files []struct {
@@ -51,51 +32,84 @@ func TestPolicyArchiveTransport(t *testing.T) {
 				} `json:"args"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-				t.Fatal(err)
+				t.Error(err)
+				return
 			}
-			want := []string{filepath.Join(root, ".titvoignore.yml"), filepath.Join(root, "main.go")}
-			if !reflect.DeepEqual(req.Args.Original, want) {
-				t.Fatalf("manifest=%v", req.Args.Original)
+			if !reflect.DeepEqual(req.Args.Original, []string{".titvoignore.yml", "a.txt", "main.go"}) {
+				t.Errorf("original_files=%v", req.Args.Original)
 			}
-			raw, _ := json.Marshal(map[string]any{"presigned_urls": map[string]string{req.Args.Files[0].Name: "https://upload.invalid/archive"}})
-			body = string(raw)
-		} else {
-			gz, e := gzip.NewReader(r.Body)
-			if e != nil {
-				t.Fatal(e)
+			urls := map[string]string{}
+			for _, f := range req.Args.Files {
+				urls[f.Name] = server.URL + "/upload/" + f.Name
+			}
+			if len(urls) != 2 {
+				t.Errorf("uploads=%v", urls)
+			}
+			json.NewEncoder(w).Encode(map[string]any{"presigned_urls": urls})
+		case "/upload/snapshot.tar.gz":
+			uploads++
+			gz, err := gzip.NewReader(r.Body)
+			if err != nil {
+				t.Error(err)
+				return
 			}
 			defer gz.Close()
 			tr := tar.NewReader(gz)
 			got := map[string]string{}
 			for {
-				h, e := tr.Next()
-				if e == io.EOF {
+				h, err := tr.Next()
+				if err == io.EOF {
 					break
 				}
-				if e != nil {
-					t.Fatal(e)
+				if err != nil {
+					t.Error(err)
+					return
 				}
 				if _, ok := got[h.Name]; ok {
-					t.Fatal("duplicate entry")
+					t.Error("duplicate archive entry")
 				}
-				data, e := io.ReadAll(tr)
-				if e != nil {
-					t.Fatal(e)
+				b, err := io.ReadAll(tr)
+				if err != nil {
+					t.Error(err)
+					return
 				}
-				got[h.Name] = string(data)
+				got[h.Name] = string(b)
 			}
-			want := map[string]string{"main.go": "working tree source", ".titvoignore.yml": "version: 1\nexceptions: []\n"}
+			want := map[string]string{"a.txt": "a.txt", "main.go": "working tree source", ".titvoignore.yml": "version: 1\nexceptions: []\n"}
 			if !reflect.DeepEqual(got, want) {
-				t.Fatalf("archive=%v", got)
+				t.Errorf("archive=%v", got)
 			}
-			uploaded = true
+		case "/upload/" + ScanManifestName:
+			uploads++
+			var m struct {
+				Files []struct{ Path string }
+				Focus []string `json:"focus_files"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&m); err != nil {
+				t.Error(err)
+			}
+			count := 0
+			for _, f := range m.Files {
+				if f.Path == ".titvoignore.yml" {
+					count++
+				}
+			}
+			if count != 1 || !reflect.DeepEqual(m.Focus, []string{"main.go"}) {
+				t.Errorf("manifest=%+v", m)
+			}
+		case "/run-scan":
+			starts++
+			fmt.Fprint(w, `{"scan_id":"policy-fixture"}`)
+		case "/scan-status":
+			fmt.Fprint(w, `{"status":"COMPLETED","result":{"status":"COMPLETED","coverage":{"complete":true}}}`)
+		default:
+			http.NotFound(w, r)
 		}
-		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
-	})
-	if err := UploadFilesAsGzip(&UploadFilesAsGzipInput{BatchId: "test", Files: files}); err != nil {
-		t.Fatal(err)
-	}
-	if !uploaded {
-		t.Fatal("no archive uploaded")
+	}))
+	defer server.Close()
+	service := ScanService{API: &APIClient{Config: Config{APIEndpoint: server.URL, APIKey: "fixture"}, HTTP: server.Client()}}
+	result, err := service.Scan(context.Background(), optionsFor(root, ScopeStaged), "", nil)
+	if err != nil || result.ScanID != "policy-fixture" || uploads != 2 || starts != 1 {
+		t.Fatalf("result=%+v error=%v uploads=%d starts=%d", result, err, uploads, starts)
 	}
 }

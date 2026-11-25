@@ -202,6 +202,18 @@ func (p Planner) Plan(ctx context.Context, o ScanOptions) (ScanPlan, error) {
 			}
 		}
 	}
+	// Control input is always read from the working tree, independently of
+	// the Git snapshot and its source-analysis focus.
+	if focus[rootPolicyName] && len(focus) == 1 {
+		return plan, fmt.Errorf("el foco contiene solo .titvoignore.yml; selecciona archivos fuente o usa --full")
+	}
+	delete(focus, rootPolicyName)
+	delete(entries, rootPolicyName)
+	if _, err := os.Lstat(filepath.Join(id.Root, rootPolicyName)); err == nil {
+		entries[rootPolicyName] = gitEntry{path: rootPolicyName, mode: "100644"}
+	} else if !os.IsNotExist(err) {
+		return plan, fmt.Errorf("no se pudo inspeccionar la política raíz: %w", err)
+	}
 	focusPaths := make([]string, 0, len(focus))
 	for name := range focus {
 		focusPaths = append(focusPaths, name)
@@ -224,7 +236,7 @@ func (p Planner) Plan(ctx context.Context, o ScanOptions) (ScanPlan, error) {
 		}
 		entry := entries[name]
 		mode := entry.mode
-		if o.Scope == ScopeFull && mode != "160000" {
+		if o.Scope == ScopeFull && name != rootPolicyName && mode != "160000" {
 			info, e := os.Lstat(filepath.Join(id.Root, name))
 			if e != nil {
 				return plan, fmt.Errorf("no se pudo leer archivo seleccionado %q", name)
@@ -239,7 +251,7 @@ func (p Planner) Plan(ctx context.Context, o ScanOptions) (ScanPlan, error) {
 		}
 		oid := entry.oid
 		var data []byte
-		if o.Scope == ScopeFull {
+		if o.Scope == ScopeFull || name == rootPolicyName {
 			oid = ""
 			data, e = readWorking(id.Root, name, o.Limits.MaxFileBytes)
 		} else {
@@ -249,6 +261,9 @@ func (p Planner) Plan(ctx context.Context, o ScanOptions) (ScanPlan, error) {
 			return plan, fmt.Errorf("no se pudo preparar %q: %w", name, e)
 		}
 		if binaryContent(data) {
+			if name == rootPolicyName {
+				return plan, fmt.Errorf("root policy is not a secure text file")
+			}
 			plan.Excluded = append(plan.Excluded, ExcludedFile{name, "binary"})
 			continue
 		}

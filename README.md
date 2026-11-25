@@ -53,6 +53,16 @@ Este comando te solicitará:
 
 La herramienta verificará tus credenciales con el servidor y almacenará la configuración en `~/.tli/config.json`.
 
+## Política de excepciones del repositorio
+
+Los escaneos incluyen `.titvoignore.yml` desde la raíz del árbol de trabajo,
+aunque no figure entre los archivos seleccionados por Git. Se incluye una sola
+vez, con las mismas validaciones de apertura segura que los archivos fuente;
+un archivo presente que no sea texto regular seguro produce un error.
+La ausencia del archivo conserva el comportamiento anterior. La CLI transporta
+el contenido sin interpretar YAML ni autorizar excepciones. Los archivos fuente
+seleccionados siguen usando su contenido actual del árbol de trabajo.
+
 ## Comandos Disponibles
 
 ### Escanear Cambios Preparados (Staged)

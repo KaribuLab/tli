@@ -162,8 +162,8 @@ func currentRemoteBranch(remote string) (string, error) {
 
 func NewScanCommand() *cobra.Command {
 	cmd := &cobra.Command{
-		Use: "scan",
-		Run: scan,
+		Use:   "scan",
+		Run:   scan,
 	}
 	cmd.Flags().StringP("path", "p", ".", "Path to scan")
 	cmd.Flags().StringP("output", "o", "markdown", "Output format")
@@ -422,23 +422,30 @@ func openFileSecurely(filePath string, repoRoot string) (*secureFileInfo, error)
 	}, nil
 }
 
-// uploadFilesAsGzipAndRun comprime la lista de archivos en un archivo gzip y lo sube usando una URL prefirmada
-func uploadFilesAsGzipAndRun(filesArray []string, scanBatchId string, repositoryUrl string, logEnabled bool, output string, branch string) error {
-	// Obtener el directorio raíz del repositorio
-	repoRoot, err := getRepoRoot()
-	if err != nil {
-		return err
-	}
-
-	// Verificar que haya archivos para procesar y abrirlos de forma segura
-	var secureFiles []ScanFileInput
-
-	defer func() {
-		for _, file := range secureFiles {
-			file.File.Close()
+// collectScanFiles keeps working-tree source semantics and includes the root
+// policy independently. Descriptors are transferred to the caller on success.
+func collectScanFiles(filesArray []string, repoRoot string) ([]ScanFileInput, error) {
+	policyPath := filepath.Join(repoRoot, ".titvoignore.yml")
+	var policy *secureFileInfo
+	if _, err := os.Lstat(policyPath); !os.IsNotExist(err) {
+		if err != nil {
+			return nil, fmt.Errorf("cannot inspect root policy: %w", err)
 		}
-	}()
-
+		var err error
+		policy, err = openFileSecurely(policyPath, repoRoot)
+		if err != nil {
+			return nil, fmt.Errorf("cannot read root policy: %w", err)
+		}
+		if policy == nil {
+			return nil, fmt.Errorf("root policy is not a secure text file")
+		}
+	}
+	var secureFiles []ScanFileInput
+	seen := make(map[string]bool)
+	if policy != nil {
+		secureFiles = append(secureFiles, ScanFileInput{File: policy.file, Path: policy.tarName, OriginalPath: policy.originalPath, Size: policy.size})
+		seen[policy.tarName] = true
+	}
 	for _, filePath := range filesArray {
 		if filePath == "" {
 			continue
@@ -452,6 +459,10 @@ func uploadFilesAsGzipAndRun(filesArray []string, scanBatchId string, repository
 		}
 
 		if secureFile != nil {
+			if seen[secureFile.tarName] {
+				secureFile.file.Close()
+				continue
+			}
 			secureFiles = append(secureFiles, ScanFileInput{
 				File:         secureFile.file,
 				Path:         secureFile.tarName,
@@ -462,6 +473,24 @@ func uploadFilesAsGzipAndRun(filesArray []string, scanBatchId string, repository
 		}
 	}
 
+	return secureFiles, nil
+}
+
+// uploadFilesAsGzipAndRun uploads the securely selected working-tree files.
+func uploadFilesAsGzipAndRun(filesArray []string, scanBatchId string, repositoryUrl string, logEnabled bool, output string, branch string) error {
+	repoRoot, err := getRepoRoot()
+	if err != nil {
+		return err
+	}
+	secureFiles, err := collectScanFiles(filesArray, repoRoot)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		for _, file := range secureFiles {
+			file.File.Close()
+		}
+	}()
 	if len(secureFiles) == 0 {
 		slog.Error("No hay archivos válidos y seguros para escanear")
 		return fmt.Errorf("no hay archivos válidos y seguros para escanear")

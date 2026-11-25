@@ -65,9 +65,13 @@ seleccionados siguen usando su contenido actual del árbol de trabajo.
 
 ## Comandos Disponibles
 
+Cada `tli scan` sube el **árbol completo** de archivos de texto (para indexado RAG) y un
+`scan-manifest.json` aparte en el mismo batch. El alcance (`--staged`, `--commit`, `--full`)
+define el **foco** del análisis en ese manifesto (`focus_files`), no reduce el snapshot.
+
 ### Escanear Cambios Preparados (Staged)
 
-Para escanear los archivos que están en el área de preparación de git:
+Sube el índice completo; el foco son los paths del área de preparación:
 
 ```bash
 tli scan --staged
@@ -75,10 +79,18 @@ tli scan --staged
 
 ### Escanear un Commit Específico
 
-Para escanear los archivos modificados en un commit específico:
+Sube el árbol de ese commit; el foco son los paths del diff contra el padre:
 
 ```bash
 tli scan --commit <hash-del-commit>
+```
+
+### Repositorio Completo
+
+Sube el working tree versionado; el foco queda vacío:
+
+```bash
+tli scan --full
 ```
 
 ### Opciones Adicionales
@@ -91,10 +103,10 @@ tli scan --commit <hash-del-commit>
 # Configuración inicial
 tli setup
 
-# Escanear archivos preparados en git
+# Escanear con foco en staged (snapshot = repo completo)
 tli scan --staged
 
-# Escanear archivos de un commit específico
+# Escanear con foco en un commit
 tli scan --commit abc123def456
 ```
 

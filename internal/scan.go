@@ -1,19 +1,8 @@
 package internal
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
-	"io"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"strings"
-	"time"
-	"unicode/utf8"
 
-	"github.com/google/uuid"
-	"github.com/gookit/slog"
 	"github.com/spf13/cobra"
 )
 
@@ -567,159 +556,50 @@ func uploadFilesAsGzipAndRun(filesArray []string, scanBatchId string, repository
 
 	return nil
 }
-
-func scan(cmd *cobra.Command, args []string) {
-	gitHook, _ := cmd.Flags().GetBool("githook")
-	logEnabled := !gitHook
-	if !logEnabled {
-		slog.SetLevelByName("panic")
+func scanOptions(cmd *cobra.Command) (ScanOptions, error) {
+	if (cmd.Flags().Changed("full") && (cmd.Flags().Changed("commit") || cmd.Flags().Changed("staged"))) || (cmd.Flags().Changed("commit") && cmd.Flags().Changed("staged")) {
+		return ScanOptions{}, fmt.Errorf("selecciona un solo alcance")
 	}
-	slog.Info("Iniciando escaneo...")
-	path, err := cmd.Flags().GetString("path")
-	if err != nil {
-		slog.Error("Error al obtener la ruta", "error", err)
-		fmt.Println("Error: Debe proporcionar --path <ruta>")
-		os.Exit(1)
-	}
-	output, err := cmd.Flags().GetString("output")
-	if err != nil {
-		slog.Error("Error al obtener el formato de salida", "error", err)
-		fmt.Println("Error: Debe proporcionar --output <formato>")
-		os.Exit(1)
-	}
-	full, err := cmd.Flags().GetBool("full")
-	if err != nil {
-		slog.Error("Error al obtener opción full scan", "error", err)
-		fmt.Println("Error: Debe proporcionar --full")
-		os.Exit(1)
-	}
-	commit, err := cmd.Flags().GetString("commit")
-	if err != nil {
-		slog.Error("Error al obtener el hash del commit", "error", err)
-		fmt.Println("Error: Debe proporcionar --commit <hash>")
-		os.Exit(1)
-	}
-	staged, err := cmd.Flags().GetBool("staged")
-	if err != nil {
-		slog.Error("Error al obtener el formato de salida", "error", err)
-		fmt.Println("Error: Debe proporcionar --staged")
-		os.Exit(1)
-	}
-	remote, err := cmd.Flags().GetString("remote")
-	if err != nil {
-		slog.Error("Error al obtener el remote", "error", err)
-		fmt.Println("Error: Debe proporcionar --remote <remote>")
-		os.Exit(1)
-	}
-
-	// Verificar que se proporcione --commit o --staged
-	if commit == "" && !staged && !full {
-		slog.Error("Debe especificar --commit, --staged o --full")
-		fmt.Println("Error: Debe proporcionar --commit <hash> , --staged o --full para ejecutar el escaneo")
-		os.Exit(1)
-	}
-
-	if commit != "" && staged && full {
-		slog.Error("No se puede especificar un commit y staged o full al mismo tiempo")
-		fmt.Println("Error: No se puede especificar un commit y staged o full al mismo tiempo")
-		os.Exit(1)
-	}
-
-	slog.Info("Ruta", "path", path)
-	slog.Info("Formato de salida", "output", output)
-
-	repositoryUrl, err := execGitCommand([]string{"remote", "get-url", remote})
-	if err != nil {
-		slog.Error("Error al obtener el URL del remote", "error", err)
-		os.Exit(1)
-	}
-
-	branch, err := currentRemoteBranch(remote)
-	if err != nil {
-		slog.Error("Error al obtener rama remota", "error", err)
-		os.Exit(1)
-	}
-
+	o := ScanOptions{Scope: ScopeFull, Limits: DefaultLimits()}
+	o.Path, _ = cmd.Flags().GetString("path")
+	o.Remote, _ = cmd.Flags().GetString("remote")
+	o.Commit, _ = cmd.Flags().GetString("commit")
+	staged, _ := cmd.Flags().GetBool("staged")
+	full, _ := cmd.Flags().GetBool("full")
 	if staged {
-		slog.Info("Escaneo de archivos estaged", "staged", staged)
-		scanBatchId := uuid.NewString()
-		files, err := execGitCommand([]string{"diff", "--cached", "--name-only"})
-		if err != nil {
-			slog.Error("Error al obtener los archivos", "error", err)
-			os.Exit(1)
-		}
-		slog.Info("Generando lote de archivos:", scanBatchId)
-		filesArray := strings.Split(files, "\n")
-
-		// Subir archivos como gzip
-		if err := uploadFilesAsGzipAndRun(filesArray, scanBatchId, sanitizeRepositoryURL(repositoryUrl), logEnabled, output, branch); err != nil {
-			slog.Error("Error al subir los archivos", "error", err)
-			os.Exit(1)
-		}
-
-		slog.Info("Proceso de escaneo completado")
-	} else if commit != "" {
-		slog.Info("Escaneo de archivos del commit", "commit", commit)
-
-		scanBatchId := uuid.NewString()
-		// Usar git show para obtener los archivos modificados en un commit específico
-		files, err := execGitCommand([]string{"show", "--name-only", "--pretty=format:", commit})
-		if err != nil {
-			slog.Error("Error al obtener los archivos del commit", "error", err)
-			os.Exit(1)
-		}
-
-		// Filtrar la salida, ya que podría contener líneas vacías al inicio
-		var filteredFiles []string
-		for _, filePath := range strings.Split(files, "\n") {
-			if filePath != "" {
-				filteredFiles = append(filteredFiles, filePath)
-			}
-		}
-
-		if len(filteredFiles) == 0 {
-			slog.Error("No se encontraron archivos en el commit", "commit", commit)
-			os.Exit(1)
-		}
-
-		slog.Info("Generando lote de archivos:", scanBatchId, "cantidad", len(filteredFiles))
-		// Subir archivos como gzip
-		if err := uploadFilesAsGzipAndRun(filteredFiles, scanBatchId, sanitizeRepositoryURL(repositoryUrl), logEnabled, output, branch); err != nil {
-			slog.Error("Error al subir los archivos", "error", err)
-			os.Exit(1)
-		}
-
-		slog.Info("Proceso de escaneo completado")
-	} else if full {
-		slog.Info("Escaneo de archivos de todo el repositorio")
-
-		scanBatchId := uuid.NewString()
-		files, err := execGitCommand([]string{"ls-files"})
-		if err != nil {
-			slog.Error("Error al obtener los archivos del repositorio", "error", err)
-			os.Exit(1)
-		}
-		slog.Info("Generando lote de archivos:", scanBatchId)
-		// Filtrar la salida, ya que podría contener líneas vacías al inicio
-		var filteredFiles []string
-		for _, filePath := range strings.Split(files, "\n") {
-			if filePath != "" {
-				filteredFiles = append(filteredFiles, filePath)
-			}
-		}
-
-		if len(filteredFiles) == 0 {
-			slog.Error("No se encontraron archivos en el commit", "commit", commit)
-			os.Exit(1)
-		}
-
-		slog.Info("Generando lote de archivos:", scanBatchId, "cantidad", len(filteredFiles))
-		// Subir archivos como gzip
-		if err := uploadFilesAsGzipAndRun(filteredFiles, scanBatchId, sanitizeRepositoryURL(repositoryUrl), logEnabled, output, branch); err != nil {
-			slog.Error("Error al subir los archivos", "error", err)
-			os.Exit(1)
-		}
-
-		slog.Info("Proceso de escaneo completado")
+		o.Scope = ScopeStaged
+	} else if o.Commit != "" {
+		o.Scope = ScopeCommit
+	} else if !full {
+		return o, fmt.Errorf("selecciona un alcance")
 	}
+	o.Limits.MaxFileBytes, _ = cmd.Flags().GetInt64("max-file-bytes")
+	o.Limits.MaxTotalBytes, _ = cmd.Flags().GetInt64("max-total-bytes")
+	o.Limits.MaxFiles, _ = cmd.Flags().GetInt("max-files")
+	o.Timeout, _ = cmd.Flags().GetDuration("timeout")
+	if o.Timeout <= 0 {
+		return o, fmt.Errorf("timeout debe ser positivo")
+	}
+	return o, ValidateLimits(o.Limits)
+}
+func runScanWithService(cmd *cobra.Command, args []string, s ScanService) error {
+	if len(args) > 0 {
+		return fmt.Errorf("scan no acepta argumentos posicionales")
+	}
+	o, e := scanOptions(cmd)
+	if e != nil {
+		return e
+	}
+	format, _ := cmd.Flags().GetString("output")
+	if format != "json" && format != "markdown" {
+		return fmt.Errorf("formato no válido")
+	}
+	hook, _ := cmd.Flags().GetBool("githook")
+	result, e := s.Scan(cmd.Context(), o, "", nil)
+	if result.ScanID != "" {
+		if err := WriteResult(cmd.OutOrStdout(), result, format, hook); err != nil {
+			return err
+		}
+	}
+	return e
 }

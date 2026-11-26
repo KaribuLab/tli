@@ -189,6 +189,27 @@ Titvo se puede integrar con git hooks para automatizar el escaneo de seguridad:
 tli githook
 ```
 
+## Niveles de Log
+
+El nivel de log se controla con la variable de entorno `TLI_LOG_LEVEL`. Si no se define, el valor por defecto es `fatal`, por lo que solo se muestran errores fatales.
+
+```bash
+TLI_LOG_LEVEL=debug tli scan --staged
+```
+
+| Valor                  | Descripción                                   |
+|------------------------|-----------------------------------------------|
+| `panic`                | Solo errores de pánico                        |
+| `fatal`                | Solo errores fatales (valor por defecto)      |
+| `error` / `err`        | Errores                                       |
+| `warn` / `warning`     | Advertencias y errores                        |
+| `notice` / `note`      | Avisos importantes                            |
+| `info`                 | Información general                           |
+| `debug`                | Información de depuración                     |
+| `trace`                | Máximo detalle                                |
+
+Los valores no reconocidos se tratan como `info`.
+
 ## Códigos de Retorno
 
 - `0`: Operación completada con éxito

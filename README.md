@@ -61,7 +61,17 @@ vez, con las mismas validaciones de apertura segura que los archivos fuente;
 un archivo presente que no sea texto regular seguro produce un error.
 La ausencia del archivo conserva el comportamiento anterior. La CLI transporta
 el contenido sin interpretar YAML ni autorizar excepciones. Los archivos fuente
-seleccionados siguen usando su contenido actual del árbol de trabajo.
+conservan su procedencia: árbol de trabajo versionado con `--full`, índice con
+`--staged` y árbol del commit con `--commit`.
+
+La política se incluye incluso sin cambios, sin seguimiento o ignorada por Git.
+Cuenta una sola vez en los límites de archivos/bytes y en `files` del manifiesto
+v1, con tamaño y SHA-256 del árbol de trabajo; nunca aparece en `focus_files`
+ni debe indexarse como código fuente. El snapshot verifica de nuevo esos bytes
+antes de subirlos. La CLI no interpreta ni aprueba el YAML.
+Si el único foco de `--staged` o `--commit` es `.titvoignore.yml`, se rechaza
+antes de contactar la API: `el foco contiene solo .titvoignore.yml; selecciona archivos fuente o usa --full`.
+Así no se convierte accidentalmente un cambio solo de política en análisis completo.
 
 ## Comandos Disponibles
 
